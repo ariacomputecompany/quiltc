@@ -1,0 +1,44 @@
+[package]
+name = "quilt-mesh-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# gRPC (for Quilt client)
+tonic = "0.12"
+prost = "0.13"
+
+# Netlink for VXLAN management (Linux only)
+futures = "0.3"
+
+# System info
+hostname = "0.4"
+num_cpus = "1.16"
+sysinfo = "0.32"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rtnetlink = "0.14"
+nix = { version = "0.29", features = ["net"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[[bin]]
+name = "quilt-mesh-agent"
+path = "src/main.rs"
