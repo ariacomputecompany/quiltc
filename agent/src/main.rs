@@ -7,16 +7,18 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use control_client::ControlClient;
 use overlay::VxlanManager;
 use quilt_client::QuiltClient;
-use types::PeerInfo;
+use types::{PeerInfo, TlsConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "quilt-mesh-agent")]
@@ -34,9 +36,25 @@ struct Args {
     #[arg(long)]
     hostname: Option<String>,
 
+    /// Quilt runtime gRPC endpoint
+    #[arg(long, default_value = "http://127.0.0.1:50051")]
+    quilt_runtime: String,
+
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// CA certificate for verifying servers (PEM)
+    #[arg(long)]
+    tls_ca: Option<PathBuf>,
+
+    /// Client certificate for mTLS (PEM)
+    #[arg(long)]
+    tls_cert: Option<PathBuf>,
+
+    /// Client private key for mTLS (PEM)
+    #[arg(long)]
+    tls_key: Option<PathBuf>,
 }
 
 struct AgentState {
@@ -70,6 +88,9 @@ async fn main() -> Result<()> {
 
     info!("Starting Quilt Mesh Agent");
 
+    #[cfg(feature = "dev-stubs")]
+    warn!("Running in dev-stub mode — VXLAN/network ops are no-ops. NOT for production.");
+
     // Parse host IP
     let host_ip: Ipv4Addr = args
         .host_ip
@@ -93,8 +114,15 @@ async fn main() -> Result<()> {
     info!("Agent configuration: hostname={}, host_ip={}, cpu_cores={}, ram_mb={}",
           hostname, host_ip, cpu_cores, ram_mb);
 
+    // Build TLS config if CA cert provided
+    let tls_config = args.tls_ca.map(|ca| TlsConfig {
+        ca_cert: ca,
+        client_cert: args.tls_cert,
+        client_key: args.tls_key,
+    });
+
     // Create control plane client
-    let control_client = ControlClient::new(args.control_plane.clone())
+    let control_client = ControlClient::new(args.control_plane.clone(), tls_config.as_ref())
         .context("Failed to create control plane client")?;
 
     // Register with control plane
@@ -123,7 +151,12 @@ async fn main() -> Result<()> {
     let vxlan_manager = Arc::new(RwLock::new(vxlan_manager));
 
     // Create Quilt client
-    let mut quilt_client = QuiltClient::new("http://127.0.0.1:50051".to_string())
+    let quilt_endpoint = if tls_config.is_some() && !args.quilt_runtime.starts_with("https://") {
+        args.quilt_runtime.replace("http://", "https://")
+    } else {
+        args.quilt_runtime
+    };
+    let mut quilt_client = QuiltClient::new(quilt_endpoint, tls_config.as_ref())
         .await
         .context("Failed to create Quilt client")?;
 
@@ -146,36 +179,102 @@ async fn main() -> Result<()> {
         quilt_client,
     });
 
+    // Create cancellation token for background loops
+    let cancel = CancellationToken::new();
+
     // Spawn heartbeat loop
     let heartbeat_state = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = heartbeat_loop(heartbeat_state).await {
-            error!("Heartbeat loop failed: {}", e);
-        }
+    let heartbeat_cancel = cancel.clone();
+    let heartbeat_handle = tokio::spawn(async move {
+        heartbeat_loop(heartbeat_state, heartbeat_cancel).await
     });
 
     // Spawn peer sync loop
     let peer_sync_state = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = peer_sync_loop(peer_sync_state).await {
-            error!("Peer sync loop failed: {}", e);
-        }
+    let peer_sync_cancel = cancel.clone();
+    let peer_sync_handle = tokio::spawn(async move {
+        peer_sync_loop(peer_sync_state, peer_sync_cancel).await
     });
 
     info!("Agent initialized successfully - running background tasks");
 
-    // Keep main thread alive
-    loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
+    // Wait for shutdown signal
+    shutdown_signal().await;
+
+    // Cancel background loops
+    cancel.cancel();
+
+    // Wait for loops to finish (with timeout)
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        async {
+            let _ = heartbeat_handle.await;
+            let _ = peer_sync_handle.await;
+        },
+    )
+    .await;
+
+    // Perform cleanup
+    if let Err(e) = graceful_shutdown(&state).await {
+        error!("Error during shutdown cleanup: {}", e);
     }
+
+    info!("Agent shutdown complete");
+
+    Ok(())
 }
 
-/// Heartbeat loop - send heartbeat every 10s
-async fn heartbeat_loop(state: Arc<AgentState>) -> Result<()> {
+/// Graceful shutdown: deregister, remove routes, clean FDB entries
+async fn graceful_shutdown(state: &AgentState) -> Result<()> {
+    // 1. Deregister from control plane
+    info!("Deregistering from control plane...");
+    if let Err(e) = state.control_client.deregister(&state.node_id).await {
+        warn!("Failed to deregister (control plane may be down): {}", e);
+    }
+
+    // 2. Remove all routes via Quilt runtime
+    info!("Removing injected routes...");
+    let peer_subnets: Vec<String> = {
+        let vxlan = state.vxlan_manager.read().await;
+        vxlan.peers().keys().cloned().collect()
+    };
+
+    {
+        let mut quilt = state.quilt_client.write().await;
+        for subnet in &peer_subnets {
+            if let Err(e) = quilt.remove_route(subnet.clone()).await {
+                warn!("Failed to remove route for {}: {}", subnet, e);
+            }
+        }
+    }
+
+    // 3. Clean up VXLAN FDB entries
+    info!("Cleaning up VXLAN FDB entries...");
+    {
+        let mut vxlan = state.vxlan_manager.write().await;
+        for subnet in &peer_subnets {
+            if let Err(e) = vxlan.remove_peer(subnet).await {
+                warn!("Failed to remove VXLAN peer {}: {}", subnet, e);
+            }
+        }
+    }
+
+    info!("Graceful shutdown cleanup complete");
+    Ok(())
+}
+
+/// Heartbeat loop - send heartbeat every 10s, cancellable
+async fn heartbeat_loop(state: Arc<AgentState>, cancel: CancellationToken) -> Result<()> {
     info!("Starting heartbeat loop (every 10s)");
 
     loop {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(10)) => {},
+            _ = cancel.cancelled() => {
+                info!("Heartbeat loop cancelled");
+                return Ok(());
+            }
+        }
 
         if let Err(e) = state.control_client.heartbeat(&state.node_id).await {
             warn!("Failed to send heartbeat: {}", e);
@@ -183,14 +282,20 @@ async fn heartbeat_loop(state: Arc<AgentState>) -> Result<()> {
     }
 }
 
-/// Peer sync loop - poll control plane for peer changes every 5s
-async fn peer_sync_loop(state: Arc<AgentState>) -> Result<()> {
+/// Peer sync loop - poll control plane for peer changes every 5s, cancellable
+async fn peer_sync_loop(state: Arc<AgentState>, cancel: CancellationToken) -> Result<()> {
     info!("Starting peer sync loop (every 5s)");
 
     let mut known_peers: HashSet<String> = HashSet::new();
 
     loop {
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {},
+            _ = cancel.cancelled() => {
+                info!("Peer sync loop cancelled");
+                return Ok(());
+            }
+        }
 
         // List all nodes from control plane
         let nodes_response = match state.control_client.list_nodes().await {
@@ -277,4 +382,30 @@ fn get_total_memory_mb() -> u64 {
     let mut sys = System::new_all();
     sys.refresh_memory();
     sys.total_memory() / 1024 / 1024 // Convert bytes to MB
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received, beginning graceful shutdown...");
 }

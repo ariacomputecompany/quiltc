@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use tracing::info;
 
+use crate::types::TlsConfig;
+
 // Include generated proto code
 pub mod quilt {
     tonic::include_proto!("quilt");
@@ -16,12 +18,39 @@ pub struct QuiltClient {
 
 impl QuiltClient {
     /// Create a new Quilt client
-    pub async fn new(quilt_endpoint: String) -> Result<Self> {
+    pub async fn new(quilt_endpoint: String, tls: Option<&TlsConfig>) -> Result<Self> {
         info!("Connecting to Quilt runtime at {}", quilt_endpoint);
 
-        let client = QuiltRuntimeClient::connect(quilt_endpoint)
-            .await
-            .context("Failed to connect to Quilt runtime")?;
+        let channel = if let Some(tls) = tls {
+            let ca_pem = std::fs::read(&tls.ca_cert)
+                .with_context(|| format!("Failed to read CA cert: {:?}", tls.ca_cert))?;
+            let ca = tonic::transport::Certificate::from_pem(ca_pem);
+
+            let mut tls_config = tonic::transport::ClientTlsConfig::new()
+                .ca_certificate(ca);
+
+            if let (Some(cert_path), Some(key_path)) = (&tls.client_cert, &tls.client_key) {
+                let cert_pem = std::fs::read(cert_path)
+                    .with_context(|| format!("Failed to read client cert: {:?}", cert_path))?;
+                let key_pem = std::fs::read(key_path)
+                    .with_context(|| format!("Failed to read client key: {:?}", key_path))?;
+                let identity = tonic::transport::Identity::from_pem(cert_pem, key_pem);
+                tls_config = tls_config.identity(identity);
+            }
+
+            tonic::transport::Channel::from_shared(quilt_endpoint)?
+                .tls_config(tls_config)?
+                .connect()
+                .await
+                .context("Failed to connect to Quilt runtime (TLS)")?
+        } else {
+            tonic::transport::Channel::from_shared(quilt_endpoint)?
+                .connect()
+                .await
+                .context("Failed to connect to Quilt runtime")?
+        };
+
+        let client = QuiltRuntimeClient::new(channel);
 
         info!("Successfully connected to Quilt runtime");
 

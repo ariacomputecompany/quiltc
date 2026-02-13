@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 // ============================================================================
 // Node Registration
@@ -45,4 +46,15 @@ pub struct PeerInfo {
     pub node_id: String,
     pub host_ip: String,
     pub subnet: String,
+}
+
+// ============================================================================
+// TLS Configuration
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    pub ca_cert: PathBuf,
+    pub client_cert: Option<PathBuf>,
+    pub client_key: Option<PathBuf>,
 }

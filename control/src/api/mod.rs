@@ -18,6 +18,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Node management
         .route("/api/nodes/register", post(nodes::register_node))
         .route("/api/nodes/:id/heartbeat", post(nodes::heartbeat))
+        .route("/api/nodes/:id/deregister", post(nodes::deregister_node))
         .route("/api/nodes", get(nodes::list_nodes))
         // Container management
         .route("/api/containers", post(containers::create_container))

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["control", "agent", "runtime"]
+members = ["control", "agent", "runtime", "tools/gen-certs", "integration-tests"]
 
 [workspace.dependencies]
 # Async runtime
@@ -23,6 +23,11 @@ thiserror = "2.0"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# TLS
+rustls = "0.23"
+rustls-pemfile = "2.1"
+tokio-rustls = "0.26"
 
 # Time handling
 time = { version = "0.3", features = ["serde", "formatting", "macros"] }

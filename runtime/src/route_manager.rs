@@ -1,3 +1,9 @@
+#[cfg(all(not(target_os = "linux"), not(feature = "dev-stubs")))]
+compile_error!(
+    "quilt-runtime requires Linux for route management. \
+     Use `cargo build --features dev-stubs` for macOS development."
+);
+
 use anyhow::{bail, Context, Result};
 use ipnet::Ipv4Net;
 use std::collections::HashMap;
@@ -42,7 +48,7 @@ impl RouteManager {
         })
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "linux"), feature = "dev-stubs"))]
     pub async fn new() -> Result<Self> {
         Ok(Self {
             state: Arc::new(RwLock::new(RouteState {
@@ -136,7 +142,7 @@ impl RouteManager {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "linux"), feature = "dev-stubs"))]
     pub async fn add_route(&self, destination: &str, interface: &str) -> Result<()> {
         warn!(
             "STUB: add_route({}, {}) - route management only available on Linux",
@@ -213,7 +219,7 @@ impl RouteManager {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "linux"), feature = "dev-stubs"))]
     pub async fn remove_route(&self, destination: &str) -> Result<()> {
         warn!(
             "STUB: remove_route({}) - route management only available on Linux",
@@ -230,5 +236,26 @@ impl RouteManager {
     pub async fn get_routes(&self) -> HashMap<String, String> {
         let state = self.state.read().await;
         state.routes.clone()
+    }
+
+    /// Remove all tracked routes (called during graceful shutdown)
+    pub async fn cleanup_all_routes(&self) {
+        let routes: Vec<String> = {
+            let state = self.state.read().await;
+            state.routes.keys().cloned().collect()
+        };
+
+        if routes.is_empty() {
+            info!("No routes to clean up");
+            return;
+        }
+
+        info!("Cleaning up {} route(s)...", routes.len());
+        for dest in routes {
+            if let Err(e) = self.remove_route(&dest).await {
+                warn!("Failed to clean up route {}: {}", dest, e);
+            }
+        }
+        info!("Route cleanup complete");
     }
 }

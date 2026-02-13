@@ -74,6 +74,21 @@ pub async fn heartbeat(
     Ok(StatusCode::OK)
 }
 
+/// POST /api/nodes/:id/deregister - Voluntarily deregister a node
+pub async fn deregister_node(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    info!("Node deregistering: {}", node_id);
+
+    let db = state.db.clone();
+    execute_async(&db, move |conn| node_registry::deregister_node(conn, &node_id))
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+    Ok(StatusCode::OK)
+}
+
 /// GET /api/nodes - List all nodes
 pub async fn list_nodes(
     State(state): State<Arc<AppState>>,

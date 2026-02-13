@@ -1,3 +1,9 @@
+#[cfg(all(not(target_os = "linux"), not(feature = "dev-stubs")))]
+compile_error!(
+    "quilt-mesh-agent requires Linux for VXLAN support. \
+     Use `cargo build --features dev-stubs` for macOS development."
+);
+
 use anyhow::Result;
 
 #[cfg(target_os = "linux")]
@@ -21,7 +27,7 @@ pub struct VxlanManager {
     peers: HashMap<String, Ipv4Addr>, // subnet -> peer_host_ip
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), feature = "dev-stubs"))]
 pub struct VxlanManager {
     local_ip: Ipv4Addr,
     peers: HashMap<String, Ipv4Addr>,
@@ -234,7 +240,7 @@ impl VxlanManager {
 // Non-Linux stub implementation
 // ============================================================================
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), feature = "dev-stubs"))]
 impl VxlanManager {
     pub async fn new(local_ip: Ipv4Addr) -> Result<Self> {
         warn!("VXLAN is only supported on Linux - running in stub mode");

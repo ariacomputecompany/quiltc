@@ -12,7 +12,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # gRPC
-tonic = "0.12"
+tonic = { version = "0.12", features = ["tls"] }
 prost = "0.13"
 
 # Networking
@@ -27,6 +27,9 @@ futures = "0.3"
 
 [build-dependencies]
 tonic-build = "0.12"
+
+[features]
+dev-stubs = []
 
 [[bin]]
 name = "quilt-runtime"

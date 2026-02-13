@@ -15,14 +15,22 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # gRPC (for Quilt client)
-tonic = "0.12"
+tonic = { version = "0.12", features = ["tls"] }
 prost = "0.13"
+
+# TLS
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true }
 
 # Netlink for VXLAN management (Linux only)
 futures = "0.3"
+
+# Shutdown coordination
+tokio-util = { version = "0.7", features = ["rt"] }
 
 # System info
 hostname = "0.4"
@@ -38,6 +46,9 @@ nix = { version = "0.29", features = ["net"] }
 
 [build-dependencies]
 tonic-build = "0.12"
+
+[features]
+dev-stubs = []
 
 [[bin]]
 name = "quilt-mesh-agent"

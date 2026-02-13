@@ -78,6 +78,22 @@ pub fn list_nodes(conn: &Connection) -> Result<Vec<Node>> {
     Ok(nodes)
 }
 
+/// Deregister a node (mark as down immediately)
+pub fn deregister_node(conn: &Connection, node_id: &str) -> Result<()> {
+    let rows = conn
+        .execute(
+            "UPDATE nodes SET status = 'down' WHERE node_id = ?1",
+            rusqlite::params![node_id],
+        )
+        .context("Failed to deregister node")?;
+
+    if rows == 0 {
+        anyhow::bail!("Node not found: {}", node_id);
+    }
+
+    Ok(())
+}
+
 /// Get the maximum subnet ID allocated (for IPAM initialization)
 pub fn get_max_subnet_id(conn: &Connection) -> Result<u8> {
     let result: Option<String> = conn

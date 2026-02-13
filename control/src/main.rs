@@ -1,6 +1,7 @@
 mod api;
 mod db;
 mod services;
+mod tls;
 mod types;
 
 use anyhow::Result;
@@ -29,6 +30,18 @@ struct Args {
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// TLS certificate file (PEM)
+    #[arg(long)]
+    tls_cert: Option<PathBuf>,
+
+    /// TLS private key file (PEM)
+    #[arg(long)]
+    tls_key: Option<PathBuf>,
+
+    /// CA certificate for client verification (enables mTLS)
+    #[arg(long)]
+    tls_ca: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -92,11 +105,60 @@ async fn main() -> Result<()> {
 
     // Parse bind address
     let addr: SocketAddr = args.bind.parse()?;
-    info!("Listening on http://{}", addr);
 
-    // Start server
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // Start server (with or without TLS)
+    if let (Some(cert_path), Some(key_path)) = (&args.tls_cert, &args.tls_key) {
+        info!("Starting HTTPS server on {} (TLS enabled)", addr);
+
+        let tls_config = tls::load_server_config(
+            cert_path,
+            key_path,
+            args.tls_ca.as_deref(),
+        )?;
+
+        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(
+            Arc::new(tls_config),
+        );
+
+        axum_server::bind_rustls(addr, rustls_config)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        info!("Listening on http://{}", addr);
+
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
+
+    info!("Control plane shutdown complete");
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received, draining connections...");
 }
