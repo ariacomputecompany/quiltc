@@ -5,8 +5,8 @@ package quilt;
 // ============================================================================
 // Quilt Runtime Service
 // ============================================================================
-// These 3 RPCs need to be implemented by the Quilt runtime to support
-// multi-host networking via Quilt Mesh.
+// Implemented by the Quilt runtime (runtime/src/service.rs).
+// Called by the Quilt Mesh agent (agent/src/quilt_client/mod.rs).
 
 service QuiltRuntime {
   // Configure the node's subnet for container IP allocation
