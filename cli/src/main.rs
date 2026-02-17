@@ -349,9 +349,10 @@ enum ContainerCmd {
     },
     Exec {
         id: String,
-        /// Command to execute (repeatable), e.g. --cmd sh --cmd -lc --cmd 'ip route'
-        #[arg(long)]
-        cmd: Vec<String>,
+        /// Command to execute. Use `--` before the command to allow args like `-lc`.
+        /// Example: `quiltc containers exec <id> -- sh -lc 'ip route'`
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
     },
     Logs {
         id: String,
@@ -1098,8 +1099,8 @@ async fn run_containers(client: &Client, cmd: ContainerCmd) -> Result<()> {
                 )
                 .await
         }
-        ContainerCmd::Exec { id, cmd } => {
-            let body = serde_json::json!({ "command": cmd });
+        ContainerCmd::Exec { id, command } => {
+            let body = serde_json::json!({ "command": command });
             client
                 .send_json(
                     Method::POST,
