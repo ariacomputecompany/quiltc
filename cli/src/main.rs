@@ -65,6 +65,24 @@ enum Command {
         cmd: ClusterCmd,
     },
 
+    /// Auth endpoints (tenant)
+    Auth {
+        #[command(subcommand)]
+        cmd: AuthCmd,
+    },
+
+    /// Tenant API keys
+    ApiKeys {
+        #[command(subcommand)]
+        cmd: ApiKeyCmd,
+    },
+
+    /// Volumes
+    Volumes {
+        #[command(subcommand)]
+        cmd: VolumeCmd,
+    },
+
     /// Agent control-plane (agent key + node token)
     Agent {
         #[command(subcommand)]
@@ -92,6 +110,91 @@ enum Command {
         /// Add header (repeatable), e.g. --header 'X-Foo: bar'
         #[arg(long)]
         header: Vec<String>,
+
+        /// Stream response body to stdout (no buffering / no JSON pretty printing)
+        #[arg(long, default_value_t = false)]
+        stream: bool,
+
+        /// Write response body to file (GET only)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AuthCmd {
+    Register {
+        #[arg(long)]
+        email: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
+        /// Raw JSON (string) or @/path/to/file.json
+        #[arg(long)]
+        json: Option<String>,
+    },
+    Login {
+        #[arg(long)]
+        email: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
+        /// Raw JSON (string) or @/path/to/file.json
+        #[arg(long)]
+        json: Option<String>,
+    },
+    Refresh {
+        /// Raw JSON (string) or @/path/to/file.json (backend-specific; may be empty)
+        #[arg(long)]
+        json: Option<String>,
+    },
+    Logout,
+    Me,
+}
+
+#[derive(Subcommand, Debug)]
+enum ApiKeyCmd {
+    List,
+    Create {
+        /// Raw JSON (string) or @/path/to/file.json
+        spec: String,
+    },
+    Delete {
+        id: String,
+    },
+    ContainerList {
+        container_id: String,
+    },
+    ContainerCreate {
+        container_id: String,
+        /// Raw JSON (string) or @/path/to/file.json
+        spec: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum VolumeCmd {
+    List,
+    Create {
+        /// Raw JSON (string) or @/path/to/file.json
+        spec: String,
+    },
+    Get {
+        name: String,
+    },
+    Delete {
+        name: String,
+    },
+    Upload {
+        name: String,
+        /// Local file path to upload
+        file: PathBuf,
+        /// Multipart field name (default: file)
+        #[arg(long, default_value = "file")]
+        field: String,
+    },
+    Download {
+        name: String,
+        /// Output file path
+        out: PathBuf,
     },
 }
 
@@ -340,17 +443,26 @@ async fn main() -> Result<()> {
 
     match args.cmd {
         Command::Clusters { cmd } => run_clusters(&tenant_client, cmd).await,
+        Command::Auth { cmd } => run_auth(&tenant_client, cmd).await,
+        Command::ApiKeys { cmd } => run_api_keys(&tenant_client, cmd).await,
+        Command::Volumes { cmd } => run_volumes(&tenant_client, cmd).await,
         Command::Agent { cmd } => {
             run_agent(&agent_client, &mut cfg, &cfg_path, args.agent_key, cmd).await
         }
         Command::Containers { cmd } => run_containers(&tenant_client, cmd).await,
-        Command::Events => run_events(&tenant_client).await,
+        Command::Events => {
+            tenant_client
+                .stream_to_stdout(Method::GET, "/api/events", Default::default(), None)
+                .await
+        }
         Command::Request {
             method,
             path,
             json,
             header,
-        } => run_request(&tenant_client, method, path, json, header).await,
+            stream,
+            out,
+        } => run_request(&tenant_client, method, path, json, header, stream, out).await,
     }
 }
 
@@ -528,6 +640,183 @@ async fn run_clusters(client: &Client, cmd: ClusterCmd) -> Result<()> {
                     &format!("/api/clusters/{}/placements", cluster_id),
                     Default::default(),
                     None,
+                )
+                .await
+        }
+    }
+}
+
+async fn run_auth(client: &Client, cmd: AuthCmd) -> Result<()> {
+    match cmd {
+        AuthCmd::Register {
+            email,
+            password,
+            json,
+        } => {
+            let body = if let Some(j) = json {
+                parse_json_arg(&j)?
+            } else {
+                serde_json::json!({
+                    "email": email.context("Missing --email (or use --json)")?,
+                    "password": password.context("Missing --password (or use --json)")?,
+                })
+            };
+            client
+                .send_json(
+                    Method::POST,
+                    "/api/auth/register",
+                    Default::default(),
+                    Some(body),
+                )
+                .await
+        }
+        AuthCmd::Login {
+            email,
+            password,
+            json,
+        } => {
+            let body = if let Some(j) = json {
+                parse_json_arg(&j)?
+            } else {
+                serde_json::json!({
+                    "email": email.context("Missing --email (or use --json)")?,
+                    "password": password.context("Missing --password (or use --json)")?,
+                })
+            };
+            client
+                .send_json(
+                    Method::POST,
+                    "/api/auth/login",
+                    Default::default(),
+                    Some(body),
+                )
+                .await
+        }
+        AuthCmd::Refresh { json } => {
+            let body = json.map(|j| parse_json_arg(&j)).transpose()?;
+            client
+                .send_json(Method::POST, "/api/auth/refresh", Default::default(), body)
+                .await
+        }
+        AuthCmd::Logout => {
+            client
+                .send_json(
+                    Method::POST,
+                    "/api/auth/logout",
+                    Default::default(),
+                    Some(serde_json::json!({})),
+                )
+                .await
+        }
+        AuthCmd::Me => {
+            client
+                .send_json(Method::GET, "/api/auth/me", Default::default(), None)
+                .await
+        }
+    }
+}
+
+async fn run_api_keys(client: &Client, cmd: ApiKeyCmd) -> Result<()> {
+    match cmd {
+        ApiKeyCmd::List => {
+            client
+                .send_json(Method::GET, "/api/api-keys", Default::default(), None)
+                .await
+        }
+        ApiKeyCmd::Create { spec } => {
+            let body = parse_json_arg(&spec)?;
+            client
+                .send_json(
+                    Method::POST,
+                    "/api/api-keys",
+                    Default::default(),
+                    Some(body),
+                )
+                .await
+        }
+        ApiKeyCmd::Delete { id } => {
+            client
+                .send_json(
+                    Method::DELETE,
+                    &format!("/api/api-keys/{}", id),
+                    Default::default(),
+                    None,
+                )
+                .await
+        }
+        ApiKeyCmd::ContainerList { container_id } => {
+            client
+                .send_json(
+                    Method::GET,
+                    &format!("/api/containers/{}/api-keys", container_id),
+                    Default::default(),
+                    None,
+                )
+                .await
+        }
+        ApiKeyCmd::ContainerCreate { container_id, spec } => {
+            let body = parse_json_arg(&spec)?;
+            client
+                .send_json(
+                    Method::POST,
+                    &format!("/api/containers/{}/api-keys", container_id),
+                    Default::default(),
+                    Some(body),
+                )
+                .await
+        }
+    }
+}
+
+async fn run_volumes(client: &Client, cmd: VolumeCmd) -> Result<()> {
+    match cmd {
+        VolumeCmd::List => {
+            client
+                .send_json(Method::GET, "/api/volumes", Default::default(), None)
+                .await
+        }
+        VolumeCmd::Create { spec } => {
+            let body = parse_json_arg(&spec)?;
+            client
+                .send_json(Method::POST, "/api/volumes", Default::default(), Some(body))
+                .await
+        }
+        VolumeCmd::Get { name } => {
+            client
+                .send_json(
+                    Method::GET,
+                    &format!("/api/volumes/{}", name),
+                    Default::default(),
+                    None,
+                )
+                .await
+        }
+        VolumeCmd::Delete { name } => {
+            client
+                .send_json(
+                    Method::DELETE,
+                    &format!("/api/volumes/{}", name),
+                    Default::default(),
+                    None,
+                )
+                .await
+        }
+        VolumeCmd::Upload { name, file, field } => {
+            client
+                .upload_file_multipart(
+                    &format!("/api/volumes/{}/upload", name),
+                    Default::default(),
+                    &field,
+                    &file,
+                )
+                .await
+        }
+        VolumeCmd::Download { name, out } => {
+            client
+                .download_to_file(
+                    &format!("/api/volumes/{}/download", name),
+                    Default::default(),
+                    &out,
                 )
                 .await
         }
@@ -896,28 +1185,17 @@ async fn run_containers(client: &Client, cmd: ContainerCmd) -> Result<()> {
     }
 }
 
-async fn run_events(client: &Client) -> Result<()> {
-    // This buffers the body. For true streaming SSE in a terminal, use:
-    // `quiltc request GET /api/events`
-    let bytes = client
-        .send_json_bytes(Method::GET, "/api/events", Default::default(), None)
-        .await?;
-    println!("{}", String::from_utf8_lossy(&bytes));
-    Ok(())
-}
-
 async fn run_request(
     client: &Client,
     method: String,
     path: String,
     json: Option<String>,
     header: Vec<String>,
+    stream: bool,
+    out: Option<PathBuf>,
 ) -> Result<()> {
     let method = Method::from_bytes(method.to_uppercase().as_bytes()).context("Invalid method")?;
-    let body = match json {
-        Some(s) => Some(parse_json_arg(&s)?),
-        None => None,
-    };
+    let body = json.as_deref().map(parse_json_arg).transpose()?;
 
     let mut headers = reqwest::header::HeaderMap::new();
     for h in header {
@@ -928,7 +1206,18 @@ async fn run_request(
         headers.insert(name, value);
     }
 
-    client.send_json(method, &path, headers, body).await
+    if let Some(out_path) = out {
+        if method != Method::GET {
+            anyhow::bail!("--out is only supported with GET");
+        }
+        return client.download_to_file(&path, headers, &out_path).await;
+    }
+
+    if stream {
+        client.stream_to_stdout(method, &path, headers, body).await
+    } else {
+        client.send_json(method, &path, headers, body).await
+    }
 }
 
 fn parse_json_arg(s: &str) -> Result<serde_json::Value> {

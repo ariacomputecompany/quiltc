@@ -32,6 +32,13 @@ impl Config {
         }
         let bytes = serde_json::to_vec_pretty(self).context("Failed to serialize config")?;
         fs::write(path, bytes).with_context(|| format!("Failed to write {:?}", path))?;
+
+        // Best-effort: keep auth/token material private on disk.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 }
