@@ -151,6 +151,20 @@ Interpretation:
 - `quiltc` can manage API keys and basic volume lifecycle with an API key.
 - Cluster control-plane endpoints and volume upload/download appear to require JWT (Authorization header) rather than accepting API keys, which blocks API-key-only workflows for those surfaces.
 
+## Retest (Post-Fix Claim)
+
+Date: 2026-02-17
+
+After a report that the earlier 401s were fixed, the following rechecks were run using the same tenant API key (`X-Api-Key`). Evidence: a new local capture folder created via `mktemp` (path recorded in `/tmp/quiltc_live_verify4_path.txt`).
+
+- `GET /api/clusters` now succeeds with `X-Api-Key`.
+  - Example response: `{ "clusters": [] }`
+
+- Volume upload/download still returns `401` with `Missing or invalid Authorization header` even when `X-Api-Key` is present.
+  - `POST /api/volumes/:name/upload`: 401
+  - `GET /api/volumes/:name/download`: 401
+  - This was reproduced both via `quiltc volumes upload/download` and via direct `curl` with `-H "X-Api-Key: ..."`.
+
 ## Next Actions
 
 1. Decide the intended production auth contract:
@@ -160,4 +174,3 @@ Interpretation:
 2. If JWT is required for clusters, perform a follow-up verification run using:
    - `quiltc auth login ...` then `quiltc clusters ...`
    - `quiltc volumes upload/download ...`
-
