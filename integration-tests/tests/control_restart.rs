@@ -30,15 +30,12 @@ async fn test_control_plane_restart_preserves_state() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Node data should be preserved
-    let resp = reqwest::get(&format!(
-        "http://127.0.0.1:{}/api/nodes",
-        new_port
-    ))
-    .await
-    .unwrap()
-    .json::<ListNodesResponse>()
-    .await
-    .unwrap();
+    let resp = reqwest::get(&format!("http://127.0.0.1:{}/api/nodes", new_port))
+        .await
+        .unwrap()
+        .json::<ListNodesResponse>()
+        .await
+        .unwrap();
 
     assert_eq!(resp.nodes.len(), 1, "Node should persist after restart");
     assert_eq!(resp.nodes[0].node_id, original_node_id);
@@ -46,10 +43,7 @@ async fn test_control_plane_restart_preserves_state() {
 
     // Register another node — IPAM should continue from correct offset
     let resp = client
-        .post(&format!(
-            "http://127.0.0.1:{}/api/nodes/register",
-            new_port
-        ))
+        .post(&format!("http://127.0.0.1:{}/api/nodes/register", new_port))
         .json(&serde_json::json!({
             "hostname": "test-node-2",
             "host_ip": "192.168.1.11",

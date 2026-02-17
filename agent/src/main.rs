@@ -80,9 +80,7 @@ async fn main() -> Result<()> {
         _ => Level::INFO,
     };
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .finish();
+    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
 
     tracing::subscriber::set_global_default(subscriber)?;
 
@@ -92,10 +90,7 @@ async fn main() -> Result<()> {
     warn!("Running in dev-stub mode — VXLAN/network ops are no-ops. NOT for production.");
 
     // Parse host IP
-    let host_ip: Ipv4Addr = args
-        .host_ip
-        .parse()
-        .context("Invalid host IP address")?;
+    let host_ip: Ipv4Addr = args.host_ip.parse().context("Invalid host IP address")?;
 
     // Get hostname
     let hostname = if let Some(h) = args.hostname {
@@ -111,8 +106,10 @@ async fn main() -> Result<()> {
     let cpu_cores = num_cpus::get() as u32;
     let ram_mb = get_total_memory_mb();
 
-    info!("Agent configuration: hostname={}, host_ip={}, cpu_cores={}, ram_mb={}",
-          hostname, host_ip, cpu_cores, ram_mb);
+    info!(
+        "Agent configuration: hostname={}, host_ip={}, cpu_cores={}, ram_mb={}",
+        hostname, host_ip, cpu_cores, ram_mb
+    );
 
     // Build TLS config if CA cert provided
     let tls_config = args.tls_ca.map(|ca| TlsConfig {
@@ -128,14 +125,22 @@ async fn main() -> Result<()> {
     // Register with control plane
     info!("Registering with control plane at {}", args.control_plane);
     let registration = control_client
-        .register_node(hostname.clone(), host_ip.to_string(), Some(cpu_cores), Some(ram_mb))
+        .register_node(
+            hostname.clone(),
+            host_ip.to_string(),
+            Some(cpu_cores),
+            Some(ram_mb),
+        )
         .await
         .context("Failed to register with control plane")?;
 
     let node_id = registration.node_id;
     let subnet = registration.subnet;
 
-    info!("Successfully registered as node_id={}, assigned subnet={}", node_id, subnet);
+    info!(
+        "Successfully registered as node_id={}, assigned subnet={}",
+        node_id, subnet
+    );
 
     // Create VXLAN manager
     let vxlan_manager = VxlanManager::new(host_ip)
@@ -185,16 +190,14 @@ async fn main() -> Result<()> {
     // Spawn heartbeat loop
     let heartbeat_state = state.clone();
     let heartbeat_cancel = cancel.clone();
-    let heartbeat_handle = tokio::spawn(async move {
-        heartbeat_loop(heartbeat_state, heartbeat_cancel).await
-    });
+    let heartbeat_handle =
+        tokio::spawn(async move { heartbeat_loop(heartbeat_state, heartbeat_cancel).await });
 
     // Spawn peer sync loop
     let peer_sync_state = state.clone();
     let peer_sync_cancel = cancel.clone();
-    let peer_sync_handle = tokio::spawn(async move {
-        peer_sync_loop(peer_sync_state, peer_sync_cancel).await
-    });
+    let peer_sync_handle =
+        tokio::spawn(async move { peer_sync_loop(peer_sync_state, peer_sync_cancel).await });
 
     info!("Agent initialized successfully - running background tasks");
 
@@ -205,13 +208,10 @@ async fn main() -> Result<()> {
     cancel.cancel();
 
     // Wait for loops to finish (with timeout)
-    let _ = tokio::time::timeout(
-        Duration::from_secs(5),
-        async {
-            let _ = heartbeat_handle.await;
-            let _ = peer_sync_handle.await;
-        },
-    )
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        let _ = heartbeat_handle.await;
+        let _ = peer_sync_handle.await;
+    })
     .await;
 
     // Perform cleanup
@@ -318,15 +318,16 @@ async fn peer_sync_loop(state: Arc<AgentState>, cancel: CancellationToken) -> Re
             })
             .collect();
 
-        let current_subnets: HashSet<String> = current_peers
-            .iter()
-            .map(|p| p.subnet.clone())
-            .collect();
+        let current_subnets: HashSet<String> =
+            current_peers.iter().map(|p| p.subnet.clone()).collect();
 
         // Find new peers (in current but not in known)
         for peer in &current_peers {
             if !known_peers.contains(&peer.subnet) {
-                info!("New peer discovered: subnet={}, host_ip={}", peer.subnet, peer.host_ip);
+                info!(
+                    "New peer discovered: subnet={}, host_ip={}",
+                    peer.subnet, peer.host_ip
+                );
 
                 // Parse peer host IP
                 if let Ok(peer_ip) = peer.host_ip.parse::<Ipv4Addr>() {
@@ -338,7 +339,10 @@ async fn peer_sync_loop(state: Arc<AgentState>, cancel: CancellationToken) -> Re
 
                     // Inject route in Quilt
                     let mut quilt = state.quilt_client.write().await;
-                    if let Err(e) = quilt.inject_route(peer.subnet.clone(), "vxlan100".to_string()).await {
+                    if let Err(e) = quilt
+                        .inject_route(peer.subnet.clone(), "vxlan100".to_string())
+                        .await
+                    {
                         error!("Failed to inject route in Quilt: {}", e);
                     }
                 } else {
@@ -350,10 +354,8 @@ async fn peer_sync_loop(state: Arc<AgentState>, cancel: CancellationToken) -> Re
         }
 
         // Find removed peers (in known but not in current)
-        let removed_subnets: Vec<String> = known_peers
-            .difference(&current_subnets)
-            .cloned()
-            .collect();
+        let removed_subnets: Vec<String> =
+            known_peers.difference(&current_subnets).cloned().collect();
 
         for subnet in removed_subnets {
             info!("Peer removed: subnet={}", subnet);

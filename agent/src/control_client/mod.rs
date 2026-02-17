@@ -11,8 +11,7 @@ pub struct ControlClient {
 
 impl ControlClient {
     pub fn new(base_url: String, tls: Option<&TlsConfig>) -> Result<Self> {
-        let mut builder = Client::builder()
-            .timeout(std::time::Duration::from_secs(10));
+        let mut builder = Client::builder().timeout(std::time::Duration::from_secs(10));
 
         if let Some(tls) = tls {
             // Load CA certificate for server verification
@@ -36,9 +35,7 @@ impl ControlClient {
             }
         }
 
-        let client = builder
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = builder.build().context("Failed to create HTTP client")?;
 
         Ok(Self { base_url, client })
     }
@@ -80,7 +77,10 @@ impl ControlClient {
             .await
             .context("Failed to parse registration response")?;
 
-        info!("Node registered: node_id={}, subnet={}", result.node_id, result.subnet);
+        info!(
+            "Node registered: node_id={}, subnet={}",
+            result.node_id, result.subnet
+        );
         Ok(result)
     }
 

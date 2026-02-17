@@ -14,11 +14,13 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 time = { workspace = true }
+futures = { workspace = true }
 
 # HTTP framework
 axum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -31,7 +33,7 @@ rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 
 # Crypto (SHA-256 for token hashing)
 sha2 = "0.10"

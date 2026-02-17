@@ -1,7 +1,7 @@
 mod common;
 
+mod concurrent_registration;
+mod control_restart;
+mod graceful_shutdown;
 mod node_lifecycle;
 mod peer_discovery;
-mod concurrent_registration;
-mod graceful_shutdown;
-mod control_restart;

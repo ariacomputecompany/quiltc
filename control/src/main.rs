@@ -1,10 +1,11 @@
 mod api;
 mod db;
+mod quilt_http;
 mod services;
 mod tls;
 mod types;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use api::nodes::AppState;
+use quilt_http::{QuiltAuth, QuiltHttpClient};
 use services::{heartbeat_monitor, SimpleIPAM, SimpleScheduler};
 
 #[derive(Parser, Debug)]
@@ -42,6 +44,18 @@ struct Args {
     /// CA certificate for client verification (enables mTLS)
     #[arg(long)]
     tls_ca: Option<PathBuf>,
+
+    /// Quilt backend base URL (enables HTTP proxy for /api/containers, /api/volumes, /api/auth, /api/api-keys, /api/events)
+    #[arg(long, env = "QUILT_API_BASE_URL")]
+    quilt_api_base_url: Option<String>,
+
+    /// Quilt tenant API key (sent as X-Api-Key)
+    #[arg(long, env = "QUILT_API_KEY")]
+    quilt_api_key: Option<String>,
+
+    /// Quilt JWT (sent as Authorization: Bearer ...)
+    #[arg(long, env = "QUILT_JWT")]
+    quilt_jwt: Option<String>,
 }
 
 #[tokio::main]
@@ -58,9 +72,7 @@ async fn main() -> Result<()> {
         _ => Level::INFO,
     };
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .finish();
+    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
 
     tracing::subscriber::set_global_default(subscriber)?;
 
@@ -70,13 +82,14 @@ async fn main() -> Result<()> {
     let db = db::init_db(args.db_path)?;
 
     // Initialize IPAM (find highest allocated subnet)
-    let max_subnet_id = db::execute_async(&db, |conn| {
-        services::node_registry::get_max_subnet_id(conn)
-    })
-    .await?;
+    let max_subnet_id =
+        db::execute_async(&db, |conn| services::node_registry::get_max_subnet_id(conn)).await?;
 
     let ipam = if max_subnet_id > 0 {
-        info!("Initializing IPAM from database (max subnet ID: {})", max_subnet_id);
+        info!(
+            "Initializing IPAM from database (max subnet ID: {})",
+            max_subnet_id
+        );
         Arc::new(SimpleIPAM::init_from_db(max_subnet_id))
     } else {
         info!("Initializing fresh IPAM");
@@ -86,11 +99,30 @@ async fn main() -> Result<()> {
     // Create scheduler
     let scheduler = Arc::new(SimpleScheduler::new());
 
+    // Optional Quilt backend proxy client
+    let quilt = if let Some(base_url) = &args.quilt_api_base_url {
+        let auth = if let Some(k) = &args.quilt_api_key {
+            Some(QuiltAuth::ApiKey(Arc::<str>::from(k.as_str())))
+        } else if let Some(jwt) = &args.quilt_jwt {
+            Some(QuiltAuth::BearerToken(Arc::<str>::from(jwt.as_str())))
+        } else {
+            None
+        };
+
+        Some(Arc::new(
+            QuiltHttpClient::new(base_url, auth)
+                .context("Failed to create Quilt HTTP proxy client")?,
+        ))
+    } else {
+        None
+    };
+
     // Create application state
     let state = Arc::new(AppState {
         db: db.clone(),
         ipam,
         scheduler,
+        quilt,
     });
 
     // Start heartbeat monitor in background
@@ -110,15 +142,10 @@ async fn main() -> Result<()> {
     if let (Some(cert_path), Some(key_path)) = (&args.tls_cert, &args.tls_key) {
         info!("Starting HTTPS server on {} (TLS enabled)", addr);
 
-        let tls_config = tls::load_server_config(
-            cert_path,
-            key_path,
-            args.tls_ca.as_deref(),
-        )?;
+        let tls_config = tls::load_server_config(cert_path, key_path, args.tls_ca.as_deref())?;
 
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(
-            Arc::new(tls_config),
-        );
+        let rustls_config =
+            axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls_config));
 
         axum_server::bind_rustls(addr, rustls_config)
             .serve(app.into_make_service())

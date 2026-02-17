@@ -39,9 +39,7 @@ impl IpamManager {
     /// Ok(()) if configuration succeeds, Err with reason if it fails
     pub async fn configure_subnet(&self, subnet_str: &str) -> Result<()> {
         // Parse subnet
-        let subnet: Ipv4Net = subnet_str
-            .parse()
-            .context("Invalid subnet CIDR format")?;
+        let subnet: Ipv4Net = subnet_str.parse().context("Invalid subnet CIDR format")?;
 
         // Validate subnet is /24
         if subnet.prefix_len() != 24 {

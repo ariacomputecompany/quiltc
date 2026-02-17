@@ -16,7 +16,12 @@ async fn test_node_registration_and_unique_subnets() {
         .await
         .expect("Failed to parse response");
 
-    assert_eq!(resp.nodes.len(), 2, "Expected 2 nodes, got {}", resp.nodes.len());
+    assert_eq!(
+        resp.nodes.len(),
+        2,
+        "Expected 2 nodes, got {}",
+        resp.nodes.len()
+    );
 
     // Subnets must be unique
     assert_ne!(

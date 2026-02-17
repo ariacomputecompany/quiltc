@@ -1,7 +1,7 @@
 use clap::Parser;
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
-    IsCa, KeyPair, KeyUsagePurpose, SanType,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyPair, KeyUsagePurpose, SanType,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -74,12 +74,7 @@ fn main() {
 
     // Generate agent client cert
     println!("Generating agent client certificate...");
-    let (cert_pem, key_pem) = generate_client_cert(
-        "quilt-agent",
-        validity,
-        &ca_cert,
-        &ca_key_pair,
-    );
+    let (cert_pem, key_pem) = generate_client_cert("quilt-agent", validity, &ca_cert, &ca_key_pair);
     write_file(&args.output.join("agent-client.pem"), &cert_pem);
     write_file(&args.output.join("agent-client.key"), &key_pem);
     println!("  -> agent-client.pem, agent-client.key");
@@ -100,10 +95,7 @@ fn generate_ca(validity: Duration) -> (rcgen::Certificate, KeyPair) {
     dn.push(DnType::OrganizationName, "Quilt Mesh");
     params.distinguished_name = dn;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    params.key_usages = vec![
-        KeyUsagePurpose::KeyCertSign,
-        KeyUsagePurpose::CrlSign,
-    ];
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
     params.not_before = OffsetDateTime::now_utc();
     params.not_after = OffsetDateTime::now_utc() + validity;
 
@@ -143,12 +135,18 @@ fn generate_server_cert(
         if let Ok(ip) = host.parse::<std::net::IpAddr>() {
             sans.push(SanType::IpAddress(ip));
         } else {
-            sans.push(SanType::DnsName(host.clone().try_into().expect("Invalid DNS name")));
+            sans.push(SanType::DnsName(
+                host.clone().try_into().expect("Invalid DNS name"),
+            ));
         }
     }
     // Always include localhost and 127.0.0.1
-    sans.push(SanType::DnsName("localhost".to_string().try_into().unwrap()));
-    sans.push(SanType::IpAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)));
+    sans.push(SanType::DnsName(
+        "localhost".to_string().try_into().unwrap(),
+    ));
+    sans.push(SanType::IpAddress(std::net::IpAddr::V4(
+        std::net::Ipv4Addr::LOCALHOST,
+    )));
     params.subject_alt_names = sans;
 
     let cert = params
@@ -172,9 +170,7 @@ fn generate_client_cert(
     dn.push(DnType::OrganizationName, "Quilt Mesh");
     params.distinguished_name = dn;
     params.is_ca = IsCa::NoCa;
-    params.key_usages = vec![
-        KeyUsagePurpose::DigitalSignature,
-    ];
+    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
     params.not_before = OffsetDateTime::now_utc();
     params.not_after = OffsetDateTime::now_utc() + validity;

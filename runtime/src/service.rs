@@ -84,14 +84,20 @@ impl QuiltRuntime for QuiltRuntimeService {
             .await
         {
             Ok(_) => {
-                info!("Successfully injected route: {} dev {}", destination, via_interface);
+                info!(
+                    "Successfully injected route: {} dev {}",
+                    destination, via_interface
+                );
                 Ok(Response::new(InjectRouteResponse {
                     success: true,
                     error: String::new(),
                 }))
             }
             Err(e) => {
-                error!("Failed to inject route {} dev {}: {}", destination, via_interface, e);
+                error!(
+                    "Failed to inject route {} dev {}: {}",
+                    destination, via_interface, e
+                );
                 Ok(Response::new(InjectRouteResponse {
                     success: false,
                     error: format!("Failed to inject route: {}", e),

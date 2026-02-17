@@ -26,8 +26,7 @@ impl QuiltClient {
                 .with_context(|| format!("Failed to read CA cert: {:?}", tls.ca_cert))?;
             let ca = tonic::transport::Certificate::from_pem(ca_pem);
 
-            let mut tls_config = tonic::transport::ClientTlsConfig::new()
-                .ca_certificate(ca);
+            let mut tls_config = tonic::transport::ClientTlsConfig::new().ca_certificate(ca);
 
             if let (Some(cert_path), Some(key_path)) = (&tls.client_cert, &tls.client_key) {
                 let cert_pem = std::fs::read(cert_path)
@@ -74,7 +73,10 @@ impl QuiltClient {
 
     /// Inject a route for a remote subnet
     pub async fn inject_route(&mut self, destination: String, via_interface: String) -> Result<()> {
-        info!("Calling InjectRoute(destination={}, via={})", destination, via_interface);
+        info!(
+            "Calling InjectRoute(destination={}, via={})",
+            destination, via_interface
+        );
 
         let req = tonic::Request::new(InjectRouteRequest {
             destination,

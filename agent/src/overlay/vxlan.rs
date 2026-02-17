@@ -37,8 +37,8 @@ pub struct VxlanManager {
 impl VxlanManager {
     /// Create a new VXLAN manager
     pub async fn new(local_ip: Ipv4Addr) -> Result<Self> {
-        let (connection, handle, _) = new_connection()
-            .context("Failed to create netlink connection")?;
+        let (connection, handle, _) =
+            new_connection().context("Failed to create netlink connection")?;
 
         // Spawn netlink connection in background
         tokio::spawn(connection);
@@ -70,7 +70,10 @@ impl VxlanManager {
         if self.interface_exists(BRIDGE_INTERFACE).await? {
             self.attach_to_bridge().await?;
         } else {
-            warn!("Bridge {} not found - VXLAN interface created but not bridged", BRIDGE_INTERFACE);
+            warn!(
+                "Bridge {} not found - VXLAN interface created but not bridged",
+                BRIDGE_INTERFACE
+            );
         }
 
         info!("VXLAN interface {} created successfully", VXLAN_INTERFACE);
@@ -79,7 +82,10 @@ impl VxlanManager {
 
     /// Add a peer to the VXLAN FDB
     pub async fn add_peer(&mut self, subnet: String, peer_host_ip: Ipv4Addr) -> Result<()> {
-        info!("Adding VXLAN peer: subnet={}, host_ip={}", subnet, peer_host_ip);
+        info!(
+            "Adding VXLAN peer: subnet={}, host_ip={}",
+            subnet, peer_host_ip
+        );
 
         // Add default FDB entry (all MACs go to this peer for this subnet)
         self.add_fdb_entry(peer_host_ip).await?;
@@ -91,7 +97,10 @@ impl VxlanManager {
     /// Remove a peer from the VXLAN FDB
     pub async fn remove_peer(&mut self, subnet: &str) -> Result<()> {
         if let Some(peer_host_ip) = self.peers.remove(subnet) {
-            info!("Removing VXLAN peer: subnet={}, host_ip={}", subnet, peer_host_ip);
+            info!(
+                "Removing VXLAN peer: subnet={}, host_ip={}",
+                subnet, peer_host_ip
+            );
             self.remove_fdb_entry(peer_host_ip).await?;
         }
         Ok(())
@@ -99,23 +108,28 @@ impl VxlanManager {
 
     /// Check if a network interface exists
     async fn interface_exists(&self, name: &str) -> Result<bool> {
-        let mut links = self.handle.link().get().match_name(name.to_string()).execute();
+        let mut links = self
+            .handle
+            .link()
+            .get()
+            .match_name(name.to_string())
+            .execute();
 
         Ok(links.try_next().await?.is_some())
     }
 
     /// Create VXLAN interface using rtnetlink
     async fn create_vxlan_interface(&self) -> Result<()> {
-        debug!("Creating VXLAN interface with VNI={}, port={}", VXLAN_VNI, VXLAN_PORT);
+        debug!(
+            "Creating VXLAN interface with VNI={}, port={}",
+            VXLAN_VNI, VXLAN_PORT
+        );
 
         // Create VXLAN link
         self.handle
             .link()
             .add()
-            .vxlan(
-                VXLAN_INTERFACE.to_string(),
-                VXLAN_VNI,
-            )
+            .vxlan(VXLAN_INTERFACE.to_string(), VXLAN_VNI)
             .execute()
             .await
             .context("Failed to create VXLAN interface")?;
@@ -127,11 +141,13 @@ impl VxlanManager {
     async fn set_link_up(&self, name: &str) -> Result<()> {
         debug!("Setting link {} up", name);
 
-        let mut links = self.handle.link().get().match_name(name.to_string()).execute();
-        let link = links
-            .try_next()
-            .await?
-            .context("Interface not found")?;
+        let mut links = self
+            .handle
+            .link()
+            .get()
+            .match_name(name.to_string())
+            .execute();
+        let link = links.try_next().await?.context("Interface not found")?;
 
         self.handle
             .link()
@@ -146,18 +162,28 @@ impl VxlanManager {
 
     /// Attach VXLAN interface to bridge
     async fn attach_to_bridge(&self) -> Result<()> {
-        debug!("Attaching {} to bridge {}", VXLAN_INTERFACE, BRIDGE_INTERFACE);
+        debug!(
+            "Attaching {} to bridge {}",
+            VXLAN_INTERFACE, BRIDGE_INTERFACE
+        );
 
         // Get bridge index
-        let mut links = self.handle.link().get().match_name(BRIDGE_INTERFACE.to_string()).execute();
-        let bridge = links
-            .try_next()
-            .await?
-            .context("Bridge not found")?;
+        let mut links = self
+            .handle
+            .link()
+            .get()
+            .match_name(BRIDGE_INTERFACE.to_string())
+            .execute();
+        let bridge = links.try_next().await?.context("Bridge not found")?;
         let bridge_index = bridge.header.index;
 
         // Get VXLAN index
-        let mut links = self.handle.link().get().match_name(VXLAN_INTERFACE.to_string()).execute();
+        let mut links = self
+            .handle
+            .link()
+            .get()
+            .match_name(VXLAN_INTERFACE.to_string())
+            .execute();
         let vxlan = links
             .try_next()
             .await?
@@ -182,7 +208,12 @@ impl VxlanManager {
         debug!("Adding FDB entry for peer {}", peer_host_ip);
 
         // Get VXLAN interface index
-        let mut links = self.handle.link().get().match_name(VXLAN_INTERFACE.to_string()).execute();
+        let mut links = self
+            .handle
+            .link()
+            .get()
+            .match_name(VXLAN_INTERFACE.to_string())
+            .execute();
         let link = links
             .try_next()
             .await?
@@ -209,7 +240,12 @@ impl VxlanManager {
         debug!("Removing FDB entry for peer {}", peer_host_ip);
 
         // Get VXLAN interface index
-        let mut links = self.handle.link().get().match_name(VXLAN_INTERFACE.to_string()).execute();
+        let mut links = self
+            .handle
+            .link()
+            .get()
+            .match_name(VXLAN_INTERFACE.to_string())
+            .execute();
         let link = links
             .try_next()
             .await?
@@ -256,7 +292,10 @@ impl VxlanManager {
     }
 
     pub async fn add_peer(&mut self, subnet: String, peer_host_ip: Ipv4Addr) -> Result<()> {
-        info!("Stub: Would add VXLAN peer subnet={}, host_ip={}", subnet, peer_host_ip);
+        info!(
+            "Stub: Would add VXLAN peer subnet={}, host_ip={}",
+            subnet, peer_host_ip
+        );
         self.peers.insert(subnet, peer_host_ip);
         Ok(())
     }

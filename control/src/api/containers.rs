@@ -9,7 +9,7 @@ use crate::{
     api::nodes::AppState,
     db::execute_async,
     services::{container_registry, node_registry},
-    types::{CreateContainerRequest, CreateContainerResponse, Container, ListContainersResponse},
+    types::{Container, CreateContainerRequest, CreateContainerResponse, ListContainersResponse},
 };
 use std::sync::Arc;
 
@@ -43,10 +43,10 @@ pub async fn create_container(
     }
 
     // Pick a node using the scheduler
-    let selected_node = state
-        .scheduler
-        .pick_node(&up_nodes)
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Scheduling failed".to_string()))?;
+    let selected_node = state.scheduler.pick_node(&up_nodes).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Scheduling failed".to_string(),
+    ))?;
 
     let node_id = selected_node.node_id.clone();
 
@@ -80,10 +80,11 @@ pub async fn get_container(
 ) -> Result<Json<Container>, (StatusCode, String)> {
     let db = state.db.clone();
 
-    let container =
-        execute_async(&db, move |conn| container_registry::get_container(conn, &container_id))
-            .await
-            .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    let container = execute_async(&db, move |conn| {
+        container_registry::get_container(conn, &container_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
     Ok(Json(container))
 }
@@ -130,7 +131,10 @@ pub async fn update_container_ip(
         .and_then(|v| v.as_str())
         .ok_or((StatusCode::BAD_REQUEST, "Missing ip_address".to_string()))?;
 
-    info!("Updating container IP: container_id={}, ip={}", container_id, ip_address);
+    info!(
+        "Updating container IP: container_id={}, ip={}",
+        container_id, ip_address
+    );
 
     let db = state.db.clone();
     let ip = ip_address.to_string();

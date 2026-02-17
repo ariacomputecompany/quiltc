@@ -54,16 +54,16 @@ async fn main() -> Result<()> {
         _ => Level::INFO,
     };
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .finish();
+    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
 
     tracing::subscriber::set_global_default(subscriber)?;
 
     info!("Starting Quilt Runtime");
 
     #[cfg(feature = "dev-stubs")]
-    tracing::warn!("Running in dev-stub mode — route management ops are no-ops. NOT for production.");
+    tracing::warn!(
+        "Running in dev-stub mode — route management ops are no-ops. NOT for production."
+    );
 
     // Create IPAM manager
     let ipam = Arc::new(IpamManager::new());
@@ -84,10 +84,7 @@ async fn main() -> Result<()> {
     let service = QuiltRuntimeService::new(ipam, route_manager);
 
     // Parse listen address
-    let addr = args
-        .grpc_addr
-        .parse()
-        .context("Invalid gRPC address")?;
+    let addr = args.grpc_addr.parse().context("Invalid gRPC address")?;
 
     // Build server with optional TLS
     let mut server = Server::builder();
@@ -101,8 +98,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Failed to read TLS key: {:?}", key_path))?;
         let server_identity = tonic::transport::Identity::from_pem(cert, key);
 
-        let mut tls_config = tonic::transport::ServerTlsConfig::new()
-            .identity(server_identity);
+        let mut tls_config = tonic::transport::ServerTlsConfig::new().identity(server_identity);
 
         if let Some(ca_path) = &args.tls_ca {
             let ca = std::fs::read(ca_path)

@@ -12,10 +12,13 @@ use crate::{
 };
 use std::sync::Arc;
 
+use crate::quilt_http::QuiltHttpClient;
+
 pub struct AppState {
     pub db: DbPool,
     pub ipam: Arc<SimpleIPAM>,
     pub scheduler: Arc<SimpleScheduler>,
+    pub quilt: Option<Arc<QuiltHttpClient>>,
 }
 
 /// POST /api/nodes/register - Register a new node
@@ -43,14 +46,7 @@ pub async fn register_node(
     let ram_mb = req.ram_mb;
 
     let node_id = execute_async(&db, move |conn| {
-        node_registry::register_node(
-            conn,
-            &hostname,
-            &host_ip,
-            &subnet_clone,
-            cpu_cores,
-            ram_mb,
-        )
+        node_registry::register_node(conn, &hostname, &host_ip, &subnet_clone, cpu_cores, ram_mb)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -67,9 +63,11 @@ pub async fn heartbeat(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let db = state.db.clone();
 
-    execute_async(&db, move |conn| node_registry::update_heartbeat(conn, &node_id))
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    execute_async(&db, move |conn| {
+        node_registry::update_heartbeat(conn, &node_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
     Ok(StatusCode::OK)
 }
@@ -82,9 +80,11 @@ pub async fn deregister_node(
     info!("Node deregistering: {}", node_id);
 
     let db = state.db.clone();
-    execute_async(&db, move |conn| node_registry::deregister_node(conn, &node_id))
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    execute_async(&db, move |conn| {
+        node_registry::deregister_node(conn, &node_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
     Ok(StatusCode::OK)
 }

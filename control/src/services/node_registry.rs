@@ -97,9 +97,11 @@ pub fn deregister_node(conn: &Connection, node_id: &str) -> Result<()> {
 /// Get the maximum subnet ID allocated (for IPAM initialization)
 pub fn get_max_subnet_id(conn: &Connection) -> Result<u8> {
     let result: Option<String> = conn
-        .query_row("SELECT subnet FROM nodes ORDER BY subnet DESC LIMIT 1", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT subnet FROM nodes ORDER BY subnet DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
         .optional()
         .context("Failed to query max subnet")?;
 
@@ -107,9 +109,7 @@ pub fn get_max_subnet_id(conn: &Connection) -> Result<u8> {
         // Parse "10.42.X.0/24" to extract X
         let parts: Vec<&str> = subnet.as_str().split('.').collect();
         if parts.len() >= 3 {
-            return parts[2]
-                .parse()
-                .context("Failed to parse subnet ID");
+            return parts[2].parse().context("Failed to parse subnet ID");
         }
     }
 
