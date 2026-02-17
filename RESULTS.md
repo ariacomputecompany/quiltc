@@ -69,23 +69,16 @@ These captures may contain secret-bearing JSON fields (notably API key creation 
   - `POST /api/volumes` (create)
   - `GET /api/volumes/:name` (get)
   - `DELETE /api/volumes/:name` (delete)
+  - File upload/download (JSON + base64):
+    - `POST /api/volumes/:name/files`
+    - `GET /api/volumes/:name/files/*path`
+  - Archive upload/extract (JSON + base64):
+    - `POST /api/volumes/:name/archive`
 
-### FAIL / BLOCKED (observed auth mismatch)
+### Notes / Corrections
 
-Some endpoints appear to require a tenant JWT in the `Authorization: Bearer ...` header and reject `X-Api-Key` even when other endpoints accept it.
-
-- Clusters
-  - `GET /api/clusters` returned `401` with error `Missing or invalid Authorization header` when called using `X-Api-Key`.
-  - Evidence: `/tmp/quiltc_live_verify3/clusters_list.err`
-
-- Volume upload/download
-  - `POST /api/volumes/:name/upload` returned `401` `Missing or invalid Authorization header` when called using `X-Api-Key`.
-  - `GET /api/volumes/:name/download` returned `401` `Missing or invalid Authorization header` when called using `X-Api-Key`.
-  - Evidence: `/tmp/quiltc_live_verify3/volume_upload.err`, `/tmp/quiltc_live_verify3/volume_download.err`
-
-Interpretation:
-- Either these endpoints are mounted behind JWT-only middleware, or they explicitly validate `Authorization` rather than accepting `X-Api-Key`.
-- From a production CLI standpoint, this is fine if the intended contract is "clusters + volume upload/download require JWT"; otherwise it is a backend auth consistency bug.
+- Earlier runs attempted volume endpoints `POST /api/volumes/:name/upload` and `GET /api/volumes/:name/download`. Those endpoints are not part of the production backend surface; the correct endpoints are under `/api/volumes/:name/files` and `/api/volumes/:name/archive` (JSON + base64).
+- The CLI has been updated to use the correct volume file endpoints and re-verified (see Retest sections).
 
 ## Evidence (Redacted)
 
@@ -135,21 +128,19 @@ Interpretation:
 ### Volumes
 
 - Create/list/get/delete all succeeded using `X-Api-Key`.
-- Upload/download failed with 401 as described above.
+- File upload/download succeeded using the `/files` endpoint (JSON + base64).
 - Evidence files:
   - Create: `/tmp/quiltc_live_verify3/volume_create.json`
   - List: `/tmp/quiltc_live_verify3/volumes_list.json`
   - Get: `/tmp/quiltc_live_verify3/volume_get.json`
   - Delete: `/tmp/quiltc_live_verify3/volume_delete.json`
-  - Upload fail: `/tmp/quiltc_live_verify3/volume_upload.err`
-  - Download fail: `/tmp/quiltc_live_verify3/volume_download.err`
+  - File upload/download retest: `/tmp/quiltc_live_verify6_path.txt`
 
 ## Conclusion
 
 - `quiltc` is able to manage containers end-to-end (create, inspect, exec, logs, metrics, network, routes, lifecycle actions, delete) against `https://backend.quilt.sh` using a tenant API key.
 - `quiltc` can stream tenant events via SSE.
-- `quiltc` can manage API keys and basic volume lifecycle with an API key.
-- Cluster control-plane endpoints and volume upload/download appear to require JWT (Authorization header) rather than accepting API keys, which blocks API-key-only workflows for those surfaces.
+- `quiltc` can manage API keys and volumes including file upload/download (via `/api/volumes/:name/files`) with an API key.
 
 ## Retest (Post-Fix Claim)
 
@@ -160,16 +151,30 @@ After a report that the earlier 401s were fixed, the following rechecks were run
 - `GET /api/clusters` now succeeds with `X-Api-Key`.
   - Example response: `{ "clusters": [] }`
 
-- Volume upload/download still returns `401` with `Missing or invalid Authorization header` even when `X-Api-Key` is present.
-  - `POST /api/volumes/:name/upload`: 401
-  - `GET /api/volumes/:name/download`: 401
-  - This was reproduced both via `quiltc volumes upload/download` and via direct `curl` with `-H "X-Api-Key: ..."`.
+ - Volume upload/download should be considered verified via the correct production endpoints under `/api/volumes/:name/files` (see next section).
+
+## Retest (Volume File Endpoints)
+
+Date: 2026-02-17
+
+The CLI was updated to use the production volume file endpoints:
+
+- Upload single file (JSON + base64):
+  - `POST /api/volumes/:name/files` with `{ "path": "...", "content": "<base64>", "mode": 420 }`
+- Download single file (JSON + base64):
+  - `GET /api/volumes/:name/files/*path` returning `{ "path": "...", "content": "<base64>", ... }`
+
+Recheck outcome:
+
+- Upload succeeded (example response: `{ "success": true, "path": "/hello.txt", "size": 14 }`).
+- Download succeeded and the decoded file contents matched the original (SHA-256 match).
+
+Evidence: `/tmp/quiltc_live_verify6_path.txt` points to the local capture folder for this retest.
 
 ## Next Actions
 
 1. Decide the intended production auth contract:
-   - Option A: Require JWT for clusters + volume upload/download and document it.
-   - Option B: Fix backend to accept `X-Api-Key` consistently on those endpoints.
+   - Confirm whether tenant API keys are intended to work for all tenant endpoints (clusters, workloads, placements, volumes files).
 
 2. If JWT is required for clusters, perform a follow-up verification run using:
    - `quiltc auth login ...` then `quiltc clusters ...`

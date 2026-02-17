@@ -302,59 +302,6 @@ impl Client {
         }
         Ok(())
     }
-
-    pub async fn upload_file_multipart(
-        &self,
-        path: &str,
-        headers: HeaderMap,
-        field_name: &str,
-        file_path: &std::path::Path,
-    ) -> Result<()> {
-        let url = self.build_url(path)?;
-        let req_id = Uuid::new_v4().to_string();
-
-        let file_name = file_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("file")
-            .to_string();
-
-        let part = reqwest::multipart::Part::file(file_path)
-            .await
-            .with_context(|| format!("Failed to open file {:?}", file_path))?
-            .file_name(file_name);
-        let form = reqwest::multipart::Form::new().part(field_name.to_string(), part);
-
-        let mut req = self.http.request(Method::POST, url.clone());
-        req = req.header("user-agent", &self.user_agent);
-        req = req.header("x-request-id", &req_id);
-
-        if let Some(auth) = &self.tenant_auth {
-            match auth {
-                TenantAuth::Jwt(jwt) => {
-                    req = req.header("authorization", format!("Bearer {}", jwt))
-                }
-                TenantAuth::ApiKey(k) => req = req.header("x-api-key", k),
-            }
-        }
-        for (k, v) in headers.iter() {
-            req = req.header(k, v);
-        }
-
-        debug!("HTTP(upload) POST {}", url);
-        let resp = req.multipart(form).send().await.context("Request failed")?;
-        let status = resp.status();
-        let bytes = resp.bytes().await.unwrap_or_default().to_vec();
-        if !status.is_success() {
-            anyhow::bail!(
-                "Upload failed: status={} body={}",
-                status.as_u16(),
-                String::from_utf8_lossy(&bytes)
-            );
-        }
-        print_bytes(&bytes)?;
-        Ok(())
-    }
 }
 
 fn should_retry(method: &Method, status: StatusCode) -> bool {

@@ -3,8 +3,11 @@ mod error;
 mod http_client;
 
 use anyhow::{Context, Result};
+use base64::Engine;
 use clap::{Parser, Subcommand};
+use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::Method;
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::Level;
@@ -187,14 +190,31 @@ enum VolumeCmd {
         name: String,
         /// Local file path to upload
         file: PathBuf,
-        /// Multipart field name (default: file)
-        #[arg(long, default_value = "file")]
-        field: String,
+        /// Destination path in the volume (default: /<basename of local file>)
+        #[arg(long)]
+        path: Option<String>,
+        /// File mode (decimal). Default: 420 (0644).
+        #[arg(long, default_value_t = 420)]
+        mode: u32,
     },
     Download {
         name: String,
+        /// Source path in the volume (default: <basename of out>)
+        #[arg(long)]
+        path: Option<String>,
         /// Output file path
         out: PathBuf,
+    },
+    ArchiveUpload {
+        name: String,
+        /// Local .tar.gz file to upload and extract
+        archive: PathBuf,
+        /// Destination directory in the volume (default: /)
+        #[arg(long, default_value = "/")]
+        path: String,
+        /// How many leading path components to strip during extraction (default: 0)
+        #[arg(long, default_value_t = 0)]
+        strip_components: u32,
     },
 }
 
@@ -802,22 +822,95 @@ async fn run_volumes(client: &Client, cmd: VolumeCmd) -> Result<()> {
                 )
                 .await
         }
-        VolumeCmd::Upload { name, file, field } => {
+        VolumeCmd::Upload {
+            name,
+            file,
+            path,
+            mode,
+        } => {
+            let bytes = fs::read(&file).with_context(|| format!("Failed to read {:?}", file))?;
+            let content = base64::engine::general_purpose::STANDARD.encode(bytes);
+
+            let filename = file.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            let dest = path.unwrap_or_else(|| format!("/{}", filename));
+
+            let body = serde_json::json!({
+                "path": dest,
+                "content": content,
+                "mode": mode,
+            });
+
             client
-                .upload_file_multipart(
-                    &format!("/api/volumes/{}/upload", name),
+                .send_json(
+                    Method::POST,
+                    &format!("/api/volumes/{}/files", name),
                     Default::default(),
-                    &field,
-                    &file,
+                    Some(body),
                 )
                 .await
         }
-        VolumeCmd::Download { name, out } => {
-            client
-                .download_to_file(
-                    &format!("/api/volumes/{}/download", name),
+        VolumeCmd::Download { name, path, out } => {
+            let guess = out
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("file")
+                .to_string();
+            let src = path.unwrap_or(guess);
+            let src = src.strip_prefix('/').unwrap_or(&src);
+            let src_enc = encode_path(src);
+
+            let bytes = client
+                .send_json_bytes(
+                    Method::GET,
+                    &format!("/api/volumes/{}/files/{}", name, src_enc),
                     Default::default(),
-                    &out,
+                    None,
+                )
+                .await?;
+            let v: serde_json::Value =
+                serde_json::from_slice(&bytes).context("Failed to parse file response JSON")?;
+            let content_b64 = v
+                .get("content")
+                .and_then(|x| x.as_str())
+                .context("file response missing content")?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(content_b64)
+                .context("Failed to base64-decode file content")?;
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create dir {:?}", parent))?;
+            }
+            fs::write(&out, &decoded).with_context(|| format!("Failed to write {:?}", out))?;
+
+            let resp = serde_json::json!({
+                "success": true,
+                "path": v.get("path").and_then(|x| x.as_str()).unwrap_or(src),
+                "out": out.to_string_lossy(),
+                "size": decoded.len(),
+            });
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+            Ok(())
+        }
+        VolumeCmd::ArchiveUpload {
+            name,
+            archive,
+            path,
+            strip_components,
+        } => {
+            let bytes =
+                fs::read(&archive).with_context(|| format!("Failed to read {:?}", archive))?;
+            let content = base64::engine::general_purpose::STANDARD.encode(bytes);
+            let body = serde_json::json!({
+                "content": content,
+                "path": path,
+                "strip_components": strip_components,
+            });
+            client
+                .send_json(
+                    Method::POST,
+                    &format!("/api/volumes/{}/archive", name),
+                    Default::default(),
+                    Some(body),
                 )
                 .await
         }
@@ -1230,6 +1323,15 @@ fn parse_json_arg(s: &str) -> Result<serde_json::Value> {
     }
     let v = serde_json::from_str(s).context("Invalid JSON")?;
     Ok(v)
+}
+
+fn encode_path(path: &str) -> String {
+    // Conservative encoding: encode each path segment to keep slashes as delimiters.
+    path.split('/')
+        .filter(|s| !s.is_empty())
+        .map(|seg| percent_encode(seg.as_bytes(), NON_ALPHANUMERIC).to_string())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn load_node_token(
