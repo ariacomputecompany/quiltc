@@ -32,15 +32,11 @@ struct Args {
     #[arg(long, env = "QUILT_API_KEY")]
     api_key: Option<String>,
 
-    /// Agent bootstrap key (X-Quilt-Agent-Key) for /api/agent/*
-    #[arg(long, env = "QUILT_AGENT_KEY")]
-    agent_key: Option<String>,
-
     /// Load config from this path
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Save provided auth (jwt/api-key/agent-key) into config
+    /// Save provided auth (jwt/api-key) into config
     #[arg(long, default_value_t = false)]
     save_auth: bool,
 
@@ -86,7 +82,7 @@ enum Command {
         cmd: VolumeCmd,
     },
 
-    /// Agent control-plane (agent key + node token)
+    /// Agent control-plane (join token + node token)
     Agent {
         #[command(subcommand)]
         cmd: AgentCmd,
@@ -278,12 +274,24 @@ enum ClusterCmd {
     Placements {
         cluster_id: String,
     },
+    JoinTokenCreate {
+        cluster_id: String,
+        /// Token TTL in seconds (optional). Valid range: 60..=86400.
+        #[arg(long)]
+        ttl_secs: Option<u64>,
+        /// Maximum uses (optional). Valid range: 1..=1000.
+        #[arg(long)]
+        max_uses: Option<u64>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 enum AgentCmd {
     Register {
         cluster_id: String,
+        /// Cluster join token (sent as X-Quilt-Join-Token). If omitted, uses env QUILT_JOIN_TOKEN.
+        #[arg(long, env = "QUILT_JOIN_TOKEN")]
+        join_token: Option<String>,
         #[arg(long)]
         name: String,
         #[arg(long)]
@@ -433,9 +441,6 @@ async fn main() -> Result<()> {
         if let Some(k) = &args.api_key {
             cfg.tenant_api_key = Some(k.clone());
         }
-        if let Some(ak) = &args.agent_key {
-            cfg.agent_key = Some(ak.clone());
-        }
         cfg.base_url = Some(args.base_url.clone());
         cfg.save(&cfg_path)?;
     }
@@ -467,9 +472,7 @@ async fn main() -> Result<()> {
         Command::Auth { cmd } => run_auth(&tenant_client, cmd).await,
         Command::ApiKeys { cmd } => run_api_keys(&tenant_client, cmd).await,
         Command::Volumes { cmd } => run_volumes(&tenant_client, cmd).await,
-        Command::Agent { cmd } => {
-            run_agent(&agent_client, &mut cfg, &cfg_path, args.agent_key, cmd).await
-        }
+        Command::Agent { cmd } => run_agent(&agent_client, &mut cfg, &cfg_path, cmd).await,
         Command::Containers { cmd } => run_containers(&tenant_client, cmd).await,
         Command::Events => {
             tenant_client
@@ -661,6 +664,28 @@ async fn run_clusters(client: &Client, cmd: ClusterCmd) -> Result<()> {
                     &format!("/api/clusters/{}/placements", cluster_id),
                     Default::default(),
                     None,
+                )
+                .await
+        }
+        ClusterCmd::JoinTokenCreate {
+            cluster_id,
+            ttl_secs,
+            max_uses,
+        } => {
+            let mut map = serde_json::Map::new();
+            if let Some(v) = ttl_secs {
+                map.insert("ttl_secs".to_string(), serde_json::Value::from(v));
+            }
+            if let Some(v) = max_uses {
+                map.insert("max_uses".to_string(), serde_json::Value::from(v));
+            }
+            let body = serde_json::Value::Object(map);
+            client
+                .send_json(
+                    Method::POST,
+                    &format!("/api/clusters/{}/join-tokens", cluster_id),
+                    Default::default(),
+                    Some(body),
                 )
                 .await
         }
@@ -921,16 +946,12 @@ async fn run_agent(
     client: &Client,
     cfg: &mut Config,
     cfg_path: &std::path::Path,
-    agent_key_arg: Option<String>,
     cmd: AgentCmd,
 ) -> Result<()> {
-    let agent_key = agent_key_arg.or_else(|| cfg.agent_key.clone()).context(
-        "Missing agent key (set --agent-key or QUILT_AGENT_KEY, or save it via --save-auth)",
-    )?;
-
     match cmd {
         AgentCmd::Register {
             cluster_id,
+            join_token,
             name,
             public_ip,
             private_ip,
@@ -941,6 +962,9 @@ async fn run_agent(
             dns_port,
             egress_limit_mbit,
         } => {
+            let join_token = join_token.context(
+                "Missing join token (set --join-token or QUILT_JOIN_TOKEN; mint via `quiltc clusters join-token-create <cluster_id> ...`)",
+            )?;
             let body = serde_json::json!({
                 "name": name,
                 "public_ip": public_ip,
@@ -955,8 +979,8 @@ async fn run_agent(
 
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
-                reqwest::header::HeaderName::from_static("x-quilt-agent-key"),
-                reqwest::header::HeaderValue::from_str(&agent_key)?,
+                reqwest::header::HeaderName::from_static("x-quilt-join-token"),
+                reqwest::header::HeaderValue::from_str(&join_token)?,
             );
 
             // Print response and also persist node_token.

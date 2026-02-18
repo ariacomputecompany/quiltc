@@ -91,7 +91,7 @@ Evidence (local): `/tmp/quiltc_cluster_session1_path.txt`, `/tmp/quiltc_cluster_
 In addition to exercising the tenant control-plane CRUD endpoints, a full session was run that mirrors the Kubernetes control loop:
 
 - Create a cluster.
-- Register nodes (agent bootstrap key), heartbeat nodes to `ready`.
+- Mint cluster-scoped join tokens, register nodes using join tokens, heartbeat nodes to `ready`.
 - Create a workload with `replicas=3`.
 - Reconcile to generate placements and assign replicas to nodes.
 - Agent fetches placements for its node.
@@ -100,6 +100,9 @@ In addition to exercising the tenant control-plane CRUD endpoints, a full sessio
 - Cleanup (delete workload, delete cluster, delete created containers).
 
 Endpoints exercised in this session:
+
+- Join tokens:
+  - `POST /api/clusters/:cluster_id/join-tokens`
 
 - Agent control-plane:
   - `POST /api/agent/clusters/:cluster_id/nodes/register`
@@ -127,5 +130,5 @@ Endpoints exercised in this session:
   - `DELETE /api/clusters/:cluster_id`
 
 Evidence (local):
-- Full kube-like session with 2 nodes, 3 replicas, placement reporting, and reschedule: `/tmp/quiltc_kube_session_full_path.txt` (points to capture folder).
+- Full kube-like session with join tokens + 2 nodes, 3 replicas, placement reporting, and reschedule: `/tmp/quiltc_kube_session_join_path.txt` (points to capture folder).
 - Node endpoints + allocation + agent placement assignment verification: `/tmp/quiltc_cluster_endpoints_verify2_path.txt` (points to capture folder).

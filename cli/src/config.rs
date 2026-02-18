@@ -9,7 +9,6 @@ pub struct Config {
     pub base_url: Option<String>,
     pub tenant_api_key: Option<String>,
     pub tenant_jwt: Option<String>,
-    pub agent_key: Option<String>,
     // Key: "{base_url}|{cluster_id}|{node_id}" -> node token
     pub node_tokens: BTreeMap<String, String>,
 }

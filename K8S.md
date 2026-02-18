@@ -76,7 +76,9 @@ The table below lists areas where we have **verified parity** with common K8s wo
 
 - **Bootstrap registration**:
   - K8s: node joins cluster (bootstrap tokens / certs)
-  - Quilt: `POST /api/agent/clusters/:cluster_id/nodes/register` using `QUILT_AGENT_KEY`
+  - Quilt: mint a cluster-scoped join token then register:
+    - `POST /api/clusters/:cluster_id/join-tokens` (tenant auth)
+    - `POST /api/agent/clusters/:cluster_id/nodes/register` with `X-Quilt-Join-Token: <join_token>`
 
 - **Heartbeat / readiness**:
   - K8s: kubelet posts node status; control plane tracks Ready/NotReady
@@ -149,4 +151,3 @@ These are common Kubernetes features that are either out of scope for Quilt’s 
 - Volume file transfer that covers common `kubectl cp` use cases (via volume file endpoints).
 
 Everything beyond that subset should be treated as “not Kubernetes parity” unless explicitly implemented and separately verified.
-
