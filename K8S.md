@@ -121,9 +121,9 @@ On a running container:
   - download file: `GET /api/volumes/:name/files/*path` (base64)
   - archive upload/extract: `POST /api/volumes/:name/archive` (base64 tar.gz)
 
-## Where We Do NOT Have Kubernetes Parity (Not Verified or Not Implemented)
+## Where We Do NOT Have Kubernetes Parity (Coming Soon)
 
-These are common Kubernetes features that are either out of scope for Quilt’s current primitives, not represented as first-class APIs, or not validated in the production session:
+These are common Kubernetes features that are either out of scope for Quilt’s current primitives, but slated for future implementation:
 
 - **Service abstraction / ClusterIP / kube-proxy behavior**
 - **Ingress / LoadBalancers**
@@ -149,5 +149,3 @@ These are common Kubernetes features that are either out of scope for Quilt’s 
 - Node registration/heartbeat/readiness and reschedule on node removal.
 - Day-2 operations on runtime containers (exec/logs/kill/delete) and a watch-like event stream.
 - Volume file transfer that covers common `kubectl cp` use cases (via volume file endpoints).
-
-Everything beyond that subset should be treated as “not Kubernetes parity” unless explicitly implemented and separately verified.
