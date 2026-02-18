@@ -17,6 +17,9 @@ Thumbs.db
 # Local env (secrets)
 .env
 
+# Local verification notes (do not commit)
+VERIFICATION.md
+
 # Database
 *.db
 *.db-shm
