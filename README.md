@@ -28,9 +28,6 @@ Optional:
 Agent enrollment uses join tokens:
 - `QUILT_JOIN_TOKEN` (cluster-scoped, short-lived join token, sent as `X-Quilt-Join-Token` on node registration)
 
-Notes:
-- Do not commit secrets. A local `.env` can be used for convenience and is gitignored by this repo.
-
 ## Quick Start (Cluster + Nodes + Workload)
 
 Create a cluster:
