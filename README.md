@@ -2,10 +2,6 @@
 
 `quiltc` is Quilt's Kubernetes-like CLI. It drives a desired-state control plane (clusters, nodes, workloads, placements) and a runtime surface (containers, volumes, events) via HTTP.
 
-See:
-- `RESULTS.md` for live verification evidence and the exact endpoint coverage.
-- `K8S.md` for the Kubernetes parity mapping.
-
 ## Build
 
 ```bash
@@ -134,3 +130,8 @@ For new/experimental endpoints not yet wrapped by a subcommand:
 quiltc request GET /api/clusters
 quiltc request POST /api/clusters/<cluster_id>/join-tokens --json '{\"ttl_secs\":600,\"max_uses\":1}'
 ```
+
+## Docs
+
+- `RESULTS.md` for live verification evidence and the exact endpoint coverage.
+- `K8S.md` for the Kubernetes parity mapping.
