@@ -47,16 +47,18 @@ pub struct CapabilityMatrix {
 pub struct OperationResponse {
     pub operation_id: Option<String>,
     pub status: Option<OperationStatus>,
+    pub operation_type: Option<String>,
     pub snapshot_id: Option<String>,
     pub container_id: Option<String>,
+    pub result_container_id: Option<String>,
     pub warnings: Option<Vec<String>>,
     pub capability_downgrades: Option<Vec<String>>,
     pub reason_code: Option<String>,
     pub reason_message: Option<String>,
-    pub progress_pct: Option<u64>,
-    pub started_at: Option<String>,
-    pub updated_at: Option<String>,
-    pub completed_at: Option<String>,
+    pub progress_pct: Option<serde_json::Value>,
+    pub started_at: Option<serde_json::Value>,
+    pub updated_at: Option<serde_json::Value>,
+    pub completed_at: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

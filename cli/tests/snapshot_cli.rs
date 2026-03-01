@@ -60,7 +60,8 @@ fn snapshots_list_get_and_lineage_routes() {
             .path("/api/snapshots")
             .query_param("container_id", "c1")
             .query_param("label", "team=core");
-        then.status(200).json_body_obj(&serde_json::json!({"snapshots":[]}));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({"snapshots":[]}));
     });
     let get = server.mock(|when, then| {
         when.method(GET).path("/api/snapshots/s1");
@@ -69,7 +70,8 @@ fn snapshots_list_get_and_lineage_routes() {
     });
     let lineage = server.mock(|when, then| {
         when.method(GET).path("/api/snapshots/s1/lineage");
-        then.status(200).json_body_obj(&serde_json::json!({"nodes":[]}));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({"nodes":[]}));
     });
 
     quiltc_cmd(&server)
@@ -104,31 +106,36 @@ fn snapshot_mutations_use_operation_contract() {
         when.method(DELETE)
             .path("/api/snapshots/s1")
             .header_exists("idempotency-key");
-        then.status(200).json_body_obj(&serde_json::json!({"operation_id":"op-del"}));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({"operation_id":"op-del"}));
     });
     let pin = server.mock(|when, then| {
         when.method(POST)
             .path("/api/snapshots/s1/pin")
             .header_exists("idempotency-key");
-        then.status(200).json_body_obj(&serde_json::json!({"operation_id":"op-pin"}));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({"operation_id":"op-pin"}));
     });
     let unpin = server.mock(|when, then| {
         when.method(POST)
             .path("/api/snapshots/s1/unpin")
             .header_exists("idempotency-key");
-        then.status(200).json_body_obj(&serde_json::json!({"operation_id":"op-unpin"}));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({"operation_id":"op-unpin"}));
     });
     let clone = server.mock(|when, then| {
         when.method(POST)
             .path("/api/snapshots/s1/clone")
             .header_exists("idempotency-key");
-        then.status(200).json_body_obj(&serde_json::json!({"operation_id":"op-clone"}));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({"operation_id":"op-clone"}));
     });
     let resume = server.mock(|when, then| {
         when.method(POST)
             .path("/api/containers/c1/resume")
             .header_exists("idempotency-key");
-        then.status(200).json_body_obj(&serde_json::json!({"operation_id":"op-resume"}));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({"operation_id":"op-resume"}));
     });
 
     quiltc_cmd(&server)
@@ -202,7 +209,8 @@ fn operations_get_route() {
 fn require_capability_blocks_when_missing() {
     let server = MockServer::start();
     let caps = server.mock(|when, then| {
-        when.method(GET).path("/api/clusters/cluster-a/capabilities");
+        when.method(GET)
+            .path("/api/clusters/cluster-a/capabilities");
         then.status(200).json_body_obj(&serde_json::json!({
             "capabilities": {"snapshot:create": false}
         }));
@@ -228,5 +236,29 @@ fn require_capability_blocks_when_missing() {
         .stderr(contains("UNSUPPORTED_NODE_CAPABILITY"));
 
     caps.assert();
-    assert_eq!(snapshot_call.hits(), 0, "snapshot call should be preflight-blocked");
+    assert_eq!(
+        snapshot_call.hits(),
+        0,
+        "snapshot call should be preflight-blocked"
+    );
+}
+
+#[test]
+fn snapshot_pin_sync_response_without_operation_id_is_accepted() {
+    let server = MockServer::start();
+    let pin = server.mock(|when, then| {
+        when.method(POST).path("/api/snapshots/s1/pin");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "success": true,
+            "message": "snapshot pinned"
+        }));
+    });
+
+    quiltc_cmd(&server)
+        .args(["snapshots", "pin", "s1"])
+        .assert()
+        .success()
+        .stdout(contains("\"success\": true"));
+
+    pin.assert();
 }
