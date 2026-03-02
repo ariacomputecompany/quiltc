@@ -82,6 +82,13 @@ Create a container:
 
 ```bash
 quiltc containers create '{\"name\":\"demo\",\"command\":[\"sh\",\"-lc\",\"echo hi; tail -f /dev/null\"],\"memory_limit_mb\":128}'
+quiltc containers create '{\"name\":\"demo\",\"image\":\"alpine:3.20\"}' --async-mode false
+```
+
+Batch create containers:
+
+```bash
+quiltc containers batch-create '[{\"name\":\"a\",\"image\":\"alpine:3.20\"},{\"name\":\"b\",\"image\":\"alpine:3.20\"}]'
 ```
 
 Exec:
@@ -102,6 +109,9 @@ Snapshot/fork/resume lifecycle:
 quiltc containers snapshot <container_id> --wait
 quiltc containers fork <container_id> --wait
 quiltc containers resume <container_or_snapshot_id> --wait
+quiltc containers stop <container_id> --async-mode true
+quiltc containers delete <container_id> --async-mode false
+quiltc snapshots clone <snapshot_id> --async-mode true
 ```
 
 Snapshot management:
