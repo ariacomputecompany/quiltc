@@ -397,18 +397,38 @@ enum ContainerCmd {
     Create {
         /// Container create JSON (string) or @/path/to/file.json
         spec: String,
+        /// Optional async mode override (default backend behavior is async=true)
+        #[arg(long)]
+        async_mode: Option<bool>,
+    },
+    BatchCreate {
+        /// Batch create JSON (string) or @/path/to/file.json.
+        /// Accepts either {"items":[...]} or a raw array of item objects.
+        spec: String,
+        /// Optional async mode override (defaults to true for batch)
+        #[arg(long)]
+        async_mode: Option<bool>,
     },
     Get {
         id: String,
     },
     Delete {
         id: String,
+        /// Optional async mode override
+        #[arg(long)]
+        async_mode: Option<bool>,
     },
     Start {
         id: String,
+        /// Optional async mode override
+        #[arg(long)]
+        async_mode: Option<bool>,
     },
     Stop {
         id: String,
+        /// Optional async mode override
+        #[arg(long)]
+        async_mode: Option<bool>,
     },
     Kill {
         id: String,
@@ -712,6 +732,8 @@ struct LifecycleRequestArgs {
     label: Vec<String>,
     #[arg(long, default_value_t = false)]
     dry_run: bool,
+    #[arg(long)]
+    async_mode: Option<bool>,
     #[command(flatten)]
     mutation: MutationControlArgs,
 }
@@ -1490,12 +1512,46 @@ async fn run_containers(client: &Client, cmd: ContainerCmd) -> Result<()> {
                 .send_json(Method::GET, "/api/containers", Default::default(), None)
                 .await
         }
-        ContainerCmd::Create { spec } => {
-            let body = parse_json_arg(&spec)?;
+        ContainerCmd::Create { spec, async_mode } => {
+            let mut body = parse_json_arg(&spec)?;
+            maybe_set_async_mode(&mut body, async_mode, false)?;
             client
                 .send_json(
                     Method::POST,
                     "/api/containers",
+                    Default::default(),
+                    Some(body),
+                )
+                .await
+        }
+        ContainerCmd::BatchCreate { spec, async_mode } => {
+            let parsed = parse_json_arg(&spec)?;
+            let mut body = match parsed {
+                serde_json::Value::Array(items) => {
+                    serde_json::json!({
+                        "items": items,
+                    })
+                }
+                serde_json::Value::Object(_) => parsed,
+                _ => anyhow::bail!("batch create spec must be an object or array"),
+            };
+
+            let obj = body
+                .as_object_mut()
+                .context("batch create request must be a JSON object")?;
+            if !obj.contains_key("items") {
+                anyhow::bail!("batch create request missing 'items' field");
+            }
+            if let Some(mode) = async_mode {
+                obj.insert("async_mode".to_string(), serde_json::Value::Bool(mode));
+            } else if !obj.contains_key("async_mode") {
+                obj.insert("async_mode".to_string(), serde_json::Value::Bool(true));
+            }
+
+            client
+                .send_json(
+                    Method::POST,
+                    "/api/containers/batch",
                     Default::default(),
                     Some(body),
                 )
@@ -1511,33 +1567,36 @@ async fn run_containers(client: &Client, cmd: ContainerCmd) -> Result<()> {
                 )
                 .await
         }
-        ContainerCmd::Delete { id } => {
+        ContainerCmd::Delete { id, async_mode } => {
+            let body = async_mode.map(|m| serde_json::json!({ "async_mode": m }));
             client
                 .send_json(
                     Method::DELETE,
                     &format!("/api/containers/{}", id),
                     Default::default(),
-                    None,
+                    body,
                 )
                 .await
         }
-        ContainerCmd::Start { id } => {
+        ContainerCmd::Start { id, async_mode } => {
+            let body = async_mode.map(|m| serde_json::json!({ "async_mode": m }));
             client
                 .send_json(
                     Method::POST,
                     &format!("/api/containers/{}/start", id),
                     Default::default(),
-                    Some(serde_json::json!({})),
+                    body,
                 )
                 .await
         }
-        ContainerCmd::Stop { id } => {
+        ContainerCmd::Stop { id, async_mode } => {
+            let body = async_mode.map(|m| serde_json::json!({ "async_mode": m }));
             client
                 .send_json(
                     Method::POST,
                     &format!("/api/containers/{}/stop", id),
                     Default::default(),
-                    Some(serde_json::json!({})),
+                    body,
                 )
                 .await
         }
@@ -1779,9 +1838,11 @@ async fn run_operations(client: &Client, cmd: OperationCmd) -> Result<()> {
             operation_id,
             timeout_secs,
         } => {
-            let op = wait_for_operation(client, &operation_id, Duration::from_secs(timeout_secs))
-                .await?;
-            print_json_value(&operation_to_json(&op, None)?)?;
+            let v =
+                wait_for_operation_value(client, &operation_id, Duration::from_secs(timeout_secs))
+                    .await?;
+            let op = parse_operation_response(&v);
+            print_json_value(&operation_to_json(&op, Some(&v))?)?;
             if let Some(status) = &op.status {
                 if status.is_terminal_failure() {
                     anyhow::bail!(
@@ -1830,6 +1891,7 @@ async fn run_lifecycle_mutation(
         "labels": labels,
         "idempotency_key": idempotency_key,
         "dry_run": options.dry_run,
+        "async_mode": options.async_mode,
     });
 
     run_operation_mutation(client, method, path, Some(body), options.mutation).await
@@ -1932,6 +1994,15 @@ async fn wait_for_operation(
     operation_id: &str,
     timeout: Duration,
 ) -> Result<OperationResponse> {
+    let v = wait_for_operation_value(client, operation_id, timeout).await?;
+    Ok(parse_operation_response(&v))
+}
+
+async fn wait_for_operation_value(
+    client: &Client,
+    operation_id: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value> {
     let started = std::time::Instant::now();
     loop {
         if started.elapsed() > timeout {
@@ -1950,7 +2021,7 @@ async fn wait_for_operation(
         let op = parse_operation_response(&v);
         if let Some(status) = &op.status {
             if status.is_terminal() {
-                return Ok(op);
+                return Ok(v);
             }
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
@@ -2094,10 +2165,12 @@ fn operation_to_json(
 fn parse_operation_response(v: &serde_json::Value) -> OperationResponse {
     let status = v.get("status").and_then(|s| s.as_str()).map(|s| match s {
         "accepted" => OperationStatus::Accepted,
+        "queued" => OperationStatus::Queued,
         "running" => OperationStatus::Running,
         "succeeded" => OperationStatus::Succeeded,
         "failed" => OperationStatus::Failed,
-        "cancelled" => OperationStatus::Cancelled,
+        "cancelled" | "canceled" => OperationStatus::Cancelled,
+        "timed_out" => OperationStatus::TimedOut,
         other => OperationStatus::Unknown(other.to_string()),
     });
 
@@ -2940,6 +3013,26 @@ fn parse_json_arg(s: &str) -> Result<serde_json::Value> {
     }
     let v = serde_json::from_str(s).context("Invalid JSON")?;
     Ok(v)
+}
+
+fn maybe_set_async_mode(
+    body: &mut serde_json::Value,
+    async_mode: Option<bool>,
+    default_true: bool,
+) -> Result<()> {
+    let obj = body
+        .as_object_mut()
+        .context("request spec must be a JSON object")?;
+    match async_mode {
+        Some(v) => {
+            obj.insert("async_mode".to_string(), serde_json::Value::Bool(v));
+        }
+        None if default_true && !obj.contains_key("async_mode") => {
+            obj.insert("async_mode".to_string(), serde_json::Value::Bool(true));
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 fn encode_path(path: &str) -> String {

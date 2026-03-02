@@ -64,10 +64,12 @@ pub struct OperationResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperationStatus {
     Accepted,
+    Queued,
     Running,
     Succeeded,
     Failed,
     Cancelled,
+    TimedOut,
     Unknown(String),
 }
 
@@ -79,10 +81,12 @@ impl<'de> Deserialize<'de> for OperationStatus {
         let value = String::deserialize(deserializer)?;
         Ok(match value.as_str() {
             "accepted" => Self::Accepted,
+            "queued" => Self::Queued,
             "running" => Self::Running,
             "succeeded" => Self::Succeeded,
             "failed" => Self::Failed,
-            "cancelled" => Self::Cancelled,
+            "cancelled" | "canceled" => Self::Cancelled,
+            "timed_out" => Self::TimedOut,
             _ => Self::Unknown(value),
         })
     }
@@ -101,19 +105,24 @@ impl OperationStatus {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Accepted => "accepted",
+            Self::Queued => "queued",
             Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
             Self::Unknown(v) => v.as_str(),
         }
     }
 
     pub fn is_terminal_failure(&self) -> bool {
-        matches!(self, Self::Failed | Self::Cancelled)
+        matches!(self, Self::Failed | Self::Cancelled | Self::TimedOut)
     }
 
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::TimedOut
+        )
     }
 }
