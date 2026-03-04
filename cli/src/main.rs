@@ -414,7 +414,7 @@ enum ContainerCmd {
     },
     Delete {
         id: String,
-        /// Optional async mode override
+        /// Optional execution mode override (maps to ?execution=async when true)
         #[arg(long)]
         async_mode: Option<bool>,
     },
@@ -426,7 +426,7 @@ enum ContainerCmd {
     },
     Stop {
         id: String,
-        /// Optional async mode override
+        /// Optional execution mode override (maps to ?execution=async when true)
         #[arg(long)]
         async_mode: Option<bool>,
     },
@@ -1568,14 +1568,13 @@ async fn run_containers(client: &Client, cmd: ContainerCmd) -> Result<()> {
                 .await
         }
         ContainerCmd::Delete { id, async_mode } => {
-            let body = async_mode.map(|m| serde_json::json!({ "async_mode": m }));
+            let path = if async_mode == Some(true) {
+                format!("/api/containers/{}?execution=async", id)
+            } else {
+                format!("/api/containers/{}", id)
+            };
             client
-                .send_json(
-                    Method::DELETE,
-                    &format!("/api/containers/{}", id),
-                    Default::default(),
-                    body,
-                )
+                .send_json(Method::DELETE, &path, Default::default(), None)
                 .await
         }
         ContainerCmd::Start { id, async_mode } => {
@@ -1590,14 +1589,13 @@ async fn run_containers(client: &Client, cmd: ContainerCmd) -> Result<()> {
                 .await
         }
         ContainerCmd::Stop { id, async_mode } => {
-            let body = async_mode.map(|m| serde_json::json!({ "async_mode": m }));
+            let path = if async_mode == Some(true) {
+                format!("/api/containers/{}/stop?execution=async", id)
+            } else {
+                format!("/api/containers/{}/stop", id)
+            };
             client
-                .send_json(
-                    Method::POST,
-                    &format!("/api/containers/{}/stop", id),
-                    Default::default(),
-                    body,
-                )
+                .send_json(Method::POST, &path, Default::default(), None)
                 .await
         }
         ContainerCmd::Kill { id } => {

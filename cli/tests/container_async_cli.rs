@@ -69,12 +69,12 @@ fn batch_create_defaults_to_async_true() {
 }
 
 #[test]
-fn stop_delete_and_start_support_async_mode_bodies() {
+fn stop_delete_use_execution_query_and_start_keeps_async_mode_body() {
     let server = MockServer::start();
     let stop = server.mock(|when, then| {
         when.method(POST)
             .path("/api/containers/c1/stop")
-            .body_contains("\"async_mode\":true");
+            .query_param("execution", "async");
         then.status(202).json_body_obj(&serde_json::json!({
             "success": true,
             "operation_id": "op-stop",
@@ -84,7 +84,7 @@ fn stop_delete_and_start_support_async_mode_bodies() {
     let delete = server.mock(|when, then| {
         when.method(DELETE)
             .path("/api/containers/c1")
-            .body_contains("\"async_mode\":false");
+            .query_param("execution", "async");
         then.status(200).json_body_obj(&serde_json::json!({
             "success": true,
             "message": "Container removed successfully"
@@ -105,7 +105,7 @@ fn stop_delete_and_start_support_async_mode_bodies() {
         .assert()
         .success();
     quiltc_cmd(&server)
-        .args(["containers", "delete", "c1", "--async-mode", "false"])
+        .args(["containers", "delete", "c1", "--async-mode", "true"])
         .assert()
         .success()
         .stdout(contains("Container removed successfully"));
