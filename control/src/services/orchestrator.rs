@@ -36,7 +36,7 @@ const RC_ORCH_DEPENDENCY_UNAVAILABLE: &str = "ORCH_DEPENDENCY_UNAVAILABLE";
 #[derive(Debug, Clone)]
 pub struct ExecutionConfig {
     pub runtime_control_base_url: Option<String>,
-    pub runtime_control_token: Option<String>,
+    pub runtime_control_api_key: Option<String>,
     pub infra_autoscaler_base_url: Option<String>,
     pub infra_scheduler_base_url: Option<String>,
 }
@@ -1034,8 +1034,8 @@ async fn dispatch_runtime_control(
         .header("X-Tenant-Id", action.tenant_id.clone())
         .header("X-Orch-Action-Id", action.action_id.clone())
         .json(&payload);
-    if let Some(token) = &cfg.runtime_control_token {
-        req = req.bearer_auth(token);
+    if let Some(api_key) = &cfg.runtime_control_api_key {
+        req = req.header("X-Api-Key", api_key);
     }
     let resp = req.send().await.context("runtime request failed")?;
     parse_runtime_response(resp.status(), resp.text().await.unwrap_or_default())
@@ -1055,8 +1055,8 @@ async fn poll_runtime_operation(
         .get(url)
         .header("X-Tenant-Id", action.tenant_id.clone())
         .header("X-Orch-Action-Id", action.action_id.clone());
-    if let Some(token) = &cfg.runtime_control_token {
-        req = req.bearer_auth(token);
+    if let Some(api_key) = &cfg.runtime_control_api_key {
+        req = req.header("X-Api-Key", api_key);
     }
     let resp = req.send().await.context("runtime poll failed")?;
     parse_runtime_response(resp.status(), resp.text().await.unwrap_or_default())
@@ -1284,12 +1284,25 @@ async fn process_action(
                 .get("container_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?;
+            let memory_limit_mb = action
+                .payload_json
+                .get("memory_limit_mb")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?;
+            let cpu_limit_percent = action
+                .payload_json
+                .get("cpu_limit_percent")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?;
             dispatch_runtime_control(
                 http,
                 cfg,
                 &action,
                 format!("/api/elasticity/control/containers/{container_id}/resize"),
-                action.payload_json.clone(),
+                json!({
+                    "memory_limit_mb": memory_limit_mb,
+                    "cpu_limit_percent": cpu_limit_percent
+                }),
             )
             .await
             .map(Some)

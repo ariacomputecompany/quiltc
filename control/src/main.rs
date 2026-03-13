@@ -47,9 +47,9 @@ struct Args {
     #[arg(long, env = "RUNTIME_CONTROL_BASE_URL")]
     runtime_control_base_url: Option<String>,
 
-    /// Runtime machine auth bearer token
-    #[arg(long, env = "RUNTIME_CONTROL_TOKEN")]
-    runtime_control_token: Option<String>,
+    /// Runtime machine API key (sent as X-Api-Key)
+    #[arg(long, env = "RUNTIME_CONTROL_API_KEY")]
+    runtime_control_api_key: Option<String>,
 
     /// Infra autoscaler API base URL for node scale actions
     #[arg(long, env = "INFRA_AUTOSCALER_BASE_URL")]
@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
 
     let execution_config = ExecutionConfig {
         runtime_control_base_url: args.runtime_control_base_url,
-        runtime_control_token: args.runtime_control_token,
+        runtime_control_api_key: args.runtime_control_api_key,
         infra_autoscaler_base_url: args.infra_autoscaler_base_url,
         infra_scheduler_base_url: args.infra_scheduler_base_url,
     };

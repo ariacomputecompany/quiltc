@@ -47,6 +47,48 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             .with_context(|| format!("Failed to run migration {}", i + 1))?;
     }
 
+    validate_schema(conn)?;
+
+    Ok(())
+}
+
+fn validate_schema(conn: &Connection) -> Result<()> {
+    fn columns_for(conn: &Connection, table: &str) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({})", table))
+            .with_context(|| format!("Failed to inspect schema for table {}", table))?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<std::collections::HashSet<_>, _>>()
+            .with_context(|| format!("Failed to read columns for table {}", table))?;
+        Ok(cols)
+    }
+
+    let policy = columns_for(conn, "orchestrator_workload_policy")?;
+    if !policy.contains("runtime_function_id") {
+        anyhow::bail!(
+            "Schema mismatch: orchestrator_workload_policy.runtime_function_id missing. \
+             This build is not backward compatible; use a fresh control DB."
+        );
+    }
+
+    let action = columns_for(conn, "orchestrator_action")?;
+    for required in [
+        "idempotency_key",
+        "decision_window_start",
+        "runtime_operation_id",
+        "terminal_status",
+        "total_latency_ms",
+    ] {
+        if !action.contains(required) {
+            anyhow::bail!(
+                "Schema mismatch: orchestrator_action.{} missing. \
+                 This build is not backward compatible; use a fresh control DB.",
+                required
+            );
+        }
+    }
+
     Ok(())
 }
 
