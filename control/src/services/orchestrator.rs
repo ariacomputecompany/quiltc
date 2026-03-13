@@ -170,12 +170,53 @@ fn normalize_reason_code(code: Option<&str>) -> String {
     }
 }
 
+fn parse_dispatch_error(message: &str) -> (String, Option<bool>, String) {
+    let mut parts = message.splitn(3, '|');
+    let first = parts.next();
+    let second = parts.next();
+    let third = parts.next();
+    match (first, second, third) {
+        (Some(code), Some(retry_tag), Some(detail)) if retry_tag.starts_with("retryable=") => {
+            let retryable = match retry_tag.trim_start_matches("retryable=") {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            };
+            (code.to_string(), retryable, detail.to_string())
+        }
+        _ => {
+            let known = [
+                RC_INVALID_ARGUMENT,
+                RC_TARGET_NOT_FOUND,
+                RC_RESOURCE_PRESSURE,
+                RC_OPERATION_FAILED,
+                RC_IDEMPOTENCY_REPLAY,
+                RC_ORCH_ACTION_UNSUPPORTED,
+                RC_ORCH_DEPENDENCY_UNAVAILABLE,
+            ];
+            for code in known {
+                if message.starts_with(code) {
+                    return (code.to_string(), None, message.to_string());
+                }
+            }
+            (
+                RC_ORCH_DEPENDENCY_UNAVAILABLE.to_string(),
+                None,
+                message.to_string(),
+            )
+        }
+    }
+}
+
 pub async fn upsert_workload_policy(
     db: &DbPool,
     tenant_id: &str,
     workload_id: &str,
     req: WorkloadPolicyRequest,
 ) -> Result<()> {
+    if req.runtime_function_id.trim().is_empty() {
+        anyhow::bail!("runtime_function_id must be non-empty");
+    }
     let now = now_unix_seconds();
     let tenant_id = tenant_id.to_string();
     let workload_id = workload_id.to_string();
@@ -1072,9 +1113,10 @@ fn parse_runtime_response(status: StatusCode, body: String) -> Result<RuntimeOpe
         .get("reason_message")
         .and_then(Value::as_str)
         .map(ToString::to_string);
+    let retryable = value.get("retryable").and_then(Value::as_bool);
 
     if status.is_server_error() {
-        anyhow::bail!("{}: {}", RC_ORCH_DEPENDENCY_UNAVAILABLE, body);
+        anyhow::bail!("{}|retryable=true|{}", RC_ORCH_DEPENDENCY_UNAVAILABLE, body);
     }
 
     let op = RuntimeOperation {
@@ -1101,8 +1143,11 @@ fn parse_runtime_response(status: StatusCode, body: String) -> Result<RuntimeOpe
         }
         let code = normalize_reason_code(op.reason_code.as_deref());
         anyhow::bail!(
-            "{}: {}",
+            "{}|retryable={}|{}",
             code,
+            retryable
+                .map(|v| if v { "true" } else { "false" })
+                .unwrap_or("unknown"),
             op.reason_message
                 .clone()
                 .unwrap_or_else(|| "client_error".to_string())
@@ -1269,6 +1314,8 @@ async fn process_action(
                     .payload_json
                     .get("function_id")
                     .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
                     .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?
             ),
             json!({
@@ -1378,20 +1425,42 @@ async fn process_action(
         }
         Err(err) => {
             let message = err.to_string();
-            let reason_code = if message.starts_with(RC_INVALID_ARGUMENT) {
-                RC_INVALID_ARGUMENT
-            } else if message.starts_with(RC_RESOURCE_PRESSURE) {
-                RC_RESOURCE_PRESSURE
-            } else if message.starts_with(RC_ORCH_ACTION_UNSUPPORTED) {
-                RC_ORCH_ACTION_UNSUPPORTED
-            } else {
-                RC_ORCH_DEPENDENCY_UNAVAILABLE
-            };
+            let (reason_code_owned, retryable_hint, detail) = parse_dispatch_error(&message);
 
             let db = db.clone();
             execute_async(&db, move |conn| {
-                if reason_code == RC_INVALID_ARGUMENT || reason_code == RC_ORCH_ACTION_UNSUPPORTED {
-                    mark_terminal(conn, &action, "failed", Some(reason_code), Some(&message))?;
+                let reason_code = reason_code_owned.as_str();
+                if action.action_type == "SetPoolTarget" {
+                    let non_retry_terminal = reason_code == RC_INVALID_ARGUMENT
+                        || reason_code == RC_TARGET_NOT_FOUND
+                        || (reason_code == RC_OPERATION_FAILED && retryable_hint != Some(true))
+                        || (reason_code == RC_RESOURCE_PRESSURE && retryable_hint != Some(true));
+                    if non_retry_terminal {
+                        mark_terminal(conn, &action, "failed", Some(reason_code), Some(&detail))?;
+                    } else if reason_code == RC_RESOURCE_PRESSURE && retryable_hint == Some(true) {
+                        let attempt = action.attempt_count + 1;
+                        let now = now_unix_seconds();
+                        conn.execute(
+                            "UPDATE orchestrator_action
+                             SET attempt_count = ?1, next_retry_at = ?2, reason_code = ?3, reason_message = ?4, updated_at = ?5
+                             WHERE action_id = ?6",
+                            params![
+                                attempt,
+                                now + 15,
+                                reason_code,
+                                detail,
+                                now,
+                                action.action_id
+                            ],
+                        )?;
+                    } else if retryable_hint == Some(true) {
+                        let attempt = action.attempt_count + 1;
+                        schedule_retry(conn, &action.action_id, attempt, reason_code, &detail)?;
+                    } else {
+                        mark_terminal(conn, &action, "failed", Some(reason_code), Some(&detail))?;
+                    }
+                } else if reason_code == RC_INVALID_ARGUMENT || reason_code == RC_ORCH_ACTION_UNSUPPORTED {
+                    mark_terminal(conn, &action, "failed", Some(reason_code), Some(&detail))?;
                 } else if reason_code == RC_RESOURCE_PRESSURE {
                     let attempt = action.attempt_count + 1;
                     let now = now_unix_seconds();
@@ -1399,18 +1468,11 @@ async fn process_action(
                         "UPDATE orchestrator_action
                          SET attempt_count = ?1, next_retry_at = ?2, reason_code = ?3, reason_message = ?4, updated_at = ?5
                          WHERE action_id = ?6",
-                        params![
-                            attempt,
-                            now + 15,
-                            reason_code,
-                            message,
-                            now,
-                            action.action_id
-                        ],
+                        params![attempt, now + 15, reason_code, detail, now, action.action_id],
                     )?;
                 } else {
                     let attempt = action.attempt_count + 1;
-                    schedule_retry(conn, &action.action_id, attempt, reason_code, &message)?;
+                    schedule_retry(conn, &action.action_id, attempt, reason_code, &detail)?;
                 }
                 Ok(())
             })
@@ -1511,6 +1573,23 @@ mod tests {
         assert_eq!(known, RC_IDEMPOTENCY_REPLAY);
         let unknown = normalize_reason_code(None);
         assert_eq!(unknown, RC_OPERATION_FAILED);
+    }
+
+    #[test]
+    fn parse_dispatch_error_reads_retryable_hint() {
+        let (code, retryable, detail) =
+            parse_dispatch_error("ELASTICITY_RESOURCE_PRESSURE|retryable=true|busy");
+        assert_eq!(code, RC_RESOURCE_PRESSURE);
+        assert_eq!(retryable, Some(true));
+        assert_eq!(detail, "busy");
+    }
+
+    #[test]
+    fn parse_dispatch_error_keeps_plain_reason_code() {
+        let (code, retryable, detail) = parse_dispatch_error("ELASTICITY_INVALID_ARGUMENT");
+        assert_eq!(code, RC_INVALID_ARGUMENT);
+        assert_eq!(retryable, None);
+        assert_eq!(detail, "ELASTICITY_INVALID_ARGUMENT");
     }
 
     #[test]
