@@ -1,69 +1,52 @@
-pub mod containers;
-pub mod nodes;
+pub mod orchestrator;
 
 use axum::{
-    body::Body,
     http::StatusCode,
-    routing::{delete, get, patch, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use std::sync::Arc;
 
+use crate::db::DbPool;
 use crate::types::HealthResponse;
-use nodes::AppState;
 
-pub fn create_router(state: Arc<AppState>) -> Router {
-    let mut router = Router::new()
-        // Health check
-        .route("/health", get(health))
-        // Node management
-        .route("/api/nodes/register", post(nodes::register_node))
-        .route("/api/nodes/:id/heartbeat", post(nodes::heartbeat))
-        .route("/api/nodes/:id/deregister", post(nodes::deregister_node))
-        .route("/api/nodes", get(nodes::list_nodes));
-
-    // Container + runtime API surface:
-    // If a Quilt backend is configured, these are proxied to Quilt's HTTP API using the configured auth.
-    // Otherwise they are handled locally (legacy DB-backed behavior used by tests/dev).
-    if state.quilt.is_some() {
-        use axum::routing::any;
-
-        router = router
-            // Containers
-            .route("/api/containers", any(quilt_proxy))
-            .route("/api/containers/*path", any(quilt_proxy))
-            // Snapshots
-            .route("/api/snapshots", any(quilt_proxy))
-            .route("/api/snapshots/*path", any(quilt_proxy))
-            // Operations
-            .route("/api/operations", any(quilt_proxy))
-            .route("/api/operations/*path", any(quilt_proxy))
-            // Auth
-            .route("/api/auth/*path", any(quilt_proxy))
-            // Volumes
-            .route("/api/volumes", any(quilt_proxy))
-            .route("/api/volumes/*path", any(quilt_proxy))
-            // API keys
-            .route("/api/api-keys", any(quilt_proxy))
-            .route("/api/api-keys/*path", any(quilt_proxy))
-            // Events (SSE)
-            .route("/api/events", any(quilt_proxy));
-    } else {
-        router = router
-            .route("/api/containers", post(containers::create_container))
-            .route("/api/containers", get(containers::list_containers))
-            .route("/api/containers/:id", get(containers::get_container))
-            .route("/api/containers/:id", delete(containers::delete_container))
-            .route(
-                "/api/containers/:id/ip",
-                patch(containers::update_container_ip),
-            );
-    }
-
-    router.with_state(state)
+#[derive(Clone)]
+pub struct AppState {
+    pub db: DbPool,
 }
 
-/// GET /health - Health check endpoint
+pub fn create_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/v1/health", get(health))
+        .route(
+            "/v1/orchestrator/tenants/:tenant_id/workloads/:workload_id/policy",
+            put(orchestrator::upsert_workload_policy),
+        )
+        .route(
+            "/v1/orchestrator/tenants/:tenant_id/workloads/:workload_id/slo",
+            put(orchestrator::upsert_workload_slo),
+        )
+        .route(
+            "/v1/orchestrator/observations",
+            post(orchestrator::ingest_observations),
+        )
+        .route("/v1/orchestrator/intents", get(orchestrator::list_intents))
+        .route("/v1/orchestrator/actions", get(orchestrator::list_actions))
+        .route(
+            "/v1/orchestrator/actions/:action_id/result",
+            post(orchestrator::update_action_result),
+        )
+        .route(
+            "/v1/orchestrator/loops/fast:run",
+            post(orchestrator::trigger_fast_loop),
+        )
+        .route(
+            "/v1/orchestrator/loops/slow:run",
+            post(orchestrator::trigger_slow_loop),
+        )
+        .with_state(state)
+}
+
 async fn health() -> (StatusCode, Json<HealthResponse>) {
     (
         StatusCode::OK,
@@ -71,19 +54,4 @@ async fn health() -> (StatusCode, Json<HealthResponse>) {
             status: "ok".to_string(),
         }),
     )
-}
-
-async fn quilt_proxy(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    req: axum::http::Request<Body>,
-) -> Result<axum::response::Response, (StatusCode, String)> {
-    let quilt = state.quilt.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Quilt backend not configured".to_string(),
-    ))?;
-
-    quilt
-        .proxy(req)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
 }

@@ -39,10 +39,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         .context("Failed to enable foreign keys")?;
 
     // Run migration files in order
-    let migrations = [
-        include_str!("../../migrations/001_nodes.sql"),
-        include_str!("../../migrations/002_containers.sql"),
-    ];
+    let migrations = [include_str!("../../migrations/003_orchestrator.sql")];
 
     for (i, migration) in migrations.iter().enumerate() {
         info!("Running migration {}", i + 1);

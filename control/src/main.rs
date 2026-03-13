@@ -1,11 +1,10 @@
 mod api;
 mod db;
-mod quilt_http;
 mod services;
 mod tls;
 mod types;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -13,9 +12,8 @@ use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use api::nodes::AppState;
-use quilt_http::{QuiltAuth, QuiltHttpClient};
-use services::{heartbeat_monitor, SimpleIPAM, SimpleScheduler};
+use api::AppState;
+use services::orchestrator::{self, ExecutionConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "quilt-mesh-control")]
@@ -45,17 +43,21 @@ struct Args {
     #[arg(long)]
     tls_ca: Option<PathBuf>,
 
-    /// Quilt backend base URL (enables HTTP proxy for /api/containers, /api/snapshots, /api/operations, /api/volumes, /api/auth, /api/api-keys, /api/events)
-    #[arg(long, env = "QUILT_API_BASE_URL")]
-    quilt_api_base_url: Option<String>,
+    /// Runtime elasticity control base URL
+    #[arg(long, env = "RUNTIME_CONTROL_BASE_URL")]
+    runtime_control_base_url: Option<String>,
 
-    /// Quilt tenant API key (sent as X-Api-Key)
-    #[arg(long, env = "QUILT_API_KEY")]
-    quilt_api_key: Option<String>,
+    /// Runtime machine auth bearer token
+    #[arg(long, env = "RUNTIME_CONTROL_TOKEN")]
+    runtime_control_token: Option<String>,
 
-    /// Quilt JWT (sent as Authorization: Bearer ...)
-    #[arg(long, env = "QUILT_JWT")]
-    quilt_jwt: Option<String>,
+    /// Infra autoscaler API base URL for node scale actions
+    #[arg(long, env = "INFRA_AUTOSCALER_BASE_URL")]
+    infra_autoscaler_base_url: Option<String>,
+
+    /// Infra scheduler API base URL for placement actions
+    #[arg(long, env = "INFRA_SCHEDULER_BASE_URL")]
+    infra_scheduler_base_url: Option<String>,
 }
 
 #[tokio::main]
@@ -81,56 +83,17 @@ async fn main() -> Result<()> {
     // Initialize database
     let db = db::init_db(args.db_path)?;
 
-    // Initialize IPAM (find highest allocated subnet)
-    let max_subnet_id =
-        db::execute_async(&db, |conn| services::node_registry::get_max_subnet_id(conn)).await?;
-
-    let ipam = if max_subnet_id > 0 {
-        info!(
-            "Initializing IPAM from database (max subnet ID: {})",
-            max_subnet_id
-        );
-        Arc::new(SimpleIPAM::init_from_db(max_subnet_id))
-    } else {
-        info!("Initializing fresh IPAM");
-        Arc::new(SimpleIPAM::new())
-    };
-
-    // Create scheduler
-    let scheduler = Arc::new(SimpleScheduler::new());
-
-    // Optional Quilt backend proxy client
-    let quilt = if let Some(base_url) = &args.quilt_api_base_url {
-        let auth = if let Some(k) = &args.quilt_api_key {
-            Some(QuiltAuth::ApiKey(Arc::<str>::from(k.as_str())))
-        } else if let Some(jwt) = &args.quilt_jwt {
-            Some(QuiltAuth::BearerToken(Arc::<str>::from(jwt.as_str())))
-        } else {
-            None
-        };
-
-        Some(Arc::new(
-            QuiltHttpClient::new(base_url, auth)
-                .context("Failed to create Quilt HTTP proxy client")?,
-        ))
-    } else {
-        None
-    };
-
     // Create application state
-    let state = Arc::new(AppState {
-        db: db.clone(),
-        ipam,
-        scheduler,
-        quilt,
-    });
+    let state = Arc::new(AppState { db: db.clone() });
 
-    // Start heartbeat monitor in background
-    tokio::spawn(async move {
-        if let Err(e) = heartbeat_monitor(db).await {
-            tracing::error!("Heartbeat monitor failed: {}", e);
-        }
-    });
+    let execution_config = ExecutionConfig {
+        runtime_control_base_url: args.runtime_control_base_url,
+        runtime_control_token: args.runtime_control_token,
+        infra_autoscaler_base_url: args.infra_autoscaler_base_url,
+        infra_scheduler_base_url: args.infra_scheduler_base_url,
+    };
+
+    orchestrator::start_loops(db, execution_config).await?;
 
     // Create router
     let app = api::create_router(state);
