@@ -7,6 +7,7 @@ pub struct HealthResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkloadPolicyRequest {
+    pub runtime_function_id: String,
     pub max_concurrency: u32,
     pub hard_quota: u32,
     pub soft_burst: u32,

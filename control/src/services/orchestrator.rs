@@ -43,6 +43,7 @@ pub struct ExecutionConfig {
 
 #[derive(Debug, Clone)]
 struct WorkloadPolicyRow {
+    runtime_function_id: String,
     max_concurrency: u32,
     hard_quota: u32,
     soft_burst: u32,
@@ -181,9 +182,10 @@ pub async fn upsert_workload_policy(
     execute_async(db, move |conn| {
         conn.execute(
             "INSERT INTO orchestrator_workload_policy
-             (tenant_id, workload_id, max_concurrency, hard_quota, soft_burst, absolute_limit, priority, cooldown_seconds, hysteresis_pct, burst_cpu_cap, burst_mem_mb, burst_ttl_seconds, target_container_ids_json, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             (tenant_id, workload_id, runtime_function_id, max_concurrency, hard_quota, soft_burst, absolute_limit, priority, cooldown_seconds, hysteresis_pct, burst_cpu_cap, burst_mem_mb, burst_ttl_seconds, target_container_ids_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(tenant_id, workload_id) DO UPDATE SET
+               runtime_function_id=excluded.runtime_function_id,
                max_concurrency=excluded.max_concurrency,
                hard_quota=excluded.hard_quota,
                soft_burst=excluded.soft_burst,
@@ -199,6 +201,7 @@ pub async fn upsert_workload_policy(
             params![
                 tenant_id,
                 workload_id,
+                req.runtime_function_id,
                 req.max_concurrency,
                 req.hard_quota,
                 req.soft_burst,
@@ -462,23 +465,24 @@ fn load_policy(
     workload_id: &str,
 ) -> Result<Option<WorkloadPolicyRow>> {
     let mut stmt = conn.prepare(
-        "SELECT max_concurrency, hard_quota, soft_burst, absolute_limit, cooldown_seconds, hysteresis_pct, burst_cpu_cap, burst_mem_mb, burst_ttl_seconds, target_container_ids_json
+        "SELECT runtime_function_id, max_concurrency, hard_quota, soft_burst, absolute_limit, cooldown_seconds, hysteresis_pct, burst_cpu_cap, burst_mem_mb, burst_ttl_seconds, target_container_ids_json
          FROM orchestrator_workload_policy
          WHERE tenant_id = ?1 AND workload_id = ?2",
     )?;
     let row = stmt
         .query_row(params![tenant_id, workload_id], |row| {
-            let targets: String = row.get(9)?;
+            let targets: String = row.get(10)?;
             Ok(WorkloadPolicyRow {
-                max_concurrency: row.get(0)?,
-                hard_quota: row.get(1)?,
-                soft_burst: row.get(2)?,
-                absolute_limit: row.get(3)?,
-                cooldown_seconds: row.get(4)?,
-                hysteresis_pct: row.get(5)?,
-                burst_cpu_cap: row.get(6)?,
-                burst_mem_mb: row.get(7)?,
-                burst_ttl_seconds: row.get(8)?,
+                runtime_function_id: row.get(0)?,
+                max_concurrency: row.get(1)?,
+                hard_quota: row.get(2)?,
+                soft_burst: row.get(3)?,
+                absolute_limit: row.get(4)?,
+                cooldown_seconds: row.get(5)?,
+                hysteresis_pct: row.get(6)?,
+                burst_cpu_cap: row.get(7)?,
+                burst_mem_mb: row.get(8)?,
+                burst_ttl_seconds: row.get(9)?,
                 target_container_ids: serde_json::from_str(&targets).unwrap_or_default(),
             })
         })
@@ -774,6 +778,7 @@ fn run_fast_loop_tx(conn: &Connection) -> Result<()> {
             &obs.workload_id,
             "SetPoolTarget",
             json!({
+                "function_id": policy.runtime_function_id,
                 "min_instances": intent.pool_min_ready,
                 "max_instances": intent.pool_max_ready
             }),
@@ -1260,9 +1265,16 @@ async fn process_action(
             &action,
             format!(
                 "/api/elasticity/control/functions/{}/pool-target",
-                action.workload_id
+                action
+                    .payload_json
+                    .get("function_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?
             ),
-            action.payload_json.clone(),
+            json!({
+                "min_instances": action.payload_json.get("min_instances").and_then(Value::as_u64).ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?,
+                "max_instances": action.payload_json.get("max_instances").and_then(Value::as_u64).ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?
+            }),
         )
         .await
         .map(Some),
@@ -1306,20 +1318,39 @@ async fn process_action(
             let db = db.clone();
             execute_async(&db, move |conn| {
                 let now = now_unix_seconds();
-                conn.execute(
-                    "UPDATE orchestrator_action
-                     SET outbound_requested_at = ?1, runtime_operation_id = ?2, runtime_operation_type = ?3, status = ?4, reason_code = ?5, reason_message = ?6, attempt_count = attempt_count + 1, next_retry_at = ?1, updated_at = ?1
-                     WHERE action_id = ?7",
-                    params![
-                        now,
-                        op.operation_id,
-                        op.operation_type,
-                        op.status,
-                        op.reason_code,
-                        op.reason_message,
-                        action.action_id
-                    ],
-                )?;
+                if is_runtime_terminal_success(&op.status) || is_runtime_terminal_failure(&op.status) {
+                    let latency = (now - action.created_at) * 1000;
+                    conn.execute(
+                        "UPDATE orchestrator_action
+                         SET outbound_requested_at = ?1, runtime_operation_id = ?2, runtime_operation_type = ?3, status = ?4, terminal_status = ?4, reason_code = ?5, reason_message = ?6, terminal_at = ?1, total_latency_ms = ?7, attempt_count = attempt_count + 1, next_retry_at = ?1, updated_at = ?1
+                         WHERE action_id = ?8",
+                        params![
+                            now,
+                            op.operation_id,
+                            op.operation_type,
+                            op.status,
+                            op.reason_code,
+                            op.reason_message,
+                            latency,
+                            action.action_id
+                        ],
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE orchestrator_action
+                         SET outbound_requested_at = ?1, runtime_operation_id = ?2, runtime_operation_type = ?3, status = ?4, reason_code = ?5, reason_message = ?6, attempt_count = attempt_count + 1, next_retry_at = ?1, updated_at = ?1
+                         WHERE action_id = ?7",
+                        params![
+                            now,
+                            op.operation_id,
+                            op.operation_type,
+                            op.status,
+                            op.reason_code,
+                            op.reason_message,
+                            action.action_id
+                        ],
+                    )?;
+                }
                 Ok(())
             })
             .await?;
@@ -1498,7 +1529,9 @@ mod tests {
         .expect("second enqueue");
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM orchestrator_action", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM orchestrator_action", [], |row| {
+                row.get(0)
+            })
             .expect("count");
         assert_eq!(count, 1);
     }

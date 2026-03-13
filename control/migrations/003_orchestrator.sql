@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS orchestrator_workload_policy (
     tenant_id TEXT NOT NULL,
     workload_id TEXT NOT NULL,
+    runtime_function_id TEXT NOT NULL,
     max_concurrency INTEGER NOT NULL,
     hard_quota INTEGER NOT NULL,
     soft_burst INTEGER NOT NULL,
