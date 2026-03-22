@@ -35,10 +35,8 @@ const RC_ORCH_DEPENDENCY_UNAVAILABLE: &str = "ORCH_DEPENDENCY_UNAVAILABLE";
 
 #[derive(Debug, Clone)]
 pub struct ExecutionConfig {
-    pub runtime_control_base_url: Option<String>,
-    pub runtime_control_api_key: Option<String>,
-    pub infra_autoscaler_base_url: Option<String>,
-    pub infra_scheduler_base_url: Option<String>,
+    pub control_base_url: Option<String>,
+    pub control_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1058,14 +1056,14 @@ fn workload_ownership_valid(conn: &Connection, tenant_id: &str, workload_id: &st
     Ok(exists.is_some())
 }
 
-async fn dispatch_runtime_control(
+async fn dispatch_control_operation(
     http: &Client,
     cfg: &ExecutionConfig,
     action: &DispatchAction,
     path: String,
     payload: Value,
 ) -> Result<RuntimeOperation> {
-    let Some(base) = &cfg.runtime_control_base_url else {
+    let Some(base) = &cfg.control_base_url else {
         anyhow::bail!("{}", RC_ORCH_DEPENDENCY_UNAVAILABLE);
     };
     let url = format!("{base}{path}");
@@ -1075,20 +1073,20 @@ async fn dispatch_runtime_control(
         .header("X-Tenant-Id", action.tenant_id.clone())
         .header("X-Orch-Action-Id", action.action_id.clone())
         .json(&payload);
-    if let Some(api_key) = &cfg.runtime_control_api_key {
+    if let Some(api_key) = &cfg.control_api_key {
         req = req.header("X-Api-Key", api_key);
     }
     let resp = req.send().await.context("runtime request failed")?;
     parse_runtime_response(resp.status(), resp.text().await.unwrap_or_default())
 }
 
-async fn poll_runtime_operation(
+async fn poll_control_operation(
     http: &Client,
     cfg: &ExecutionConfig,
     action: &DispatchAction,
     operation_id: &str,
 ) -> Result<RuntimeOperation> {
-    let Some(base) = &cfg.runtime_control_base_url else {
+    let Some(base) = &cfg.control_base_url else {
         anyhow::bail!("{}", RC_ORCH_DEPENDENCY_UNAVAILABLE);
     };
     let url = format!("{base}/api/elasticity/control/operations/{operation_id}");
@@ -1096,7 +1094,7 @@ async fn poll_runtime_operation(
         .get(url)
         .header("X-Tenant-Id", action.tenant_id.clone())
         .header("X-Orch-Action-Id", action.action_id.clone());
-    if let Some(api_key) = &cfg.runtime_control_api_key {
+    if let Some(api_key) = &cfg.control_api_key {
         req = req.header("X-Api-Key", api_key);
     }
     let resp = req.send().await.context("runtime poll failed")?;
@@ -1156,41 +1154,6 @@ fn parse_runtime_response(status: StatusCode, body: String) -> Result<RuntimeOpe
     Ok(op)
 }
 
-async fn dispatch_non_runtime(
-    http: &Client,
-    cfg: &ExecutionConfig,
-    action: &DispatchAction,
-    endpoint: &str,
-) -> Result<()> {
-    let (base, reason) = if action.action_type == "SetPlacementPreference" {
-        (
-            cfg.infra_scheduler_base_url.as_ref(),
-            "infra scheduler unavailable",
-        )
-    } else {
-        (
-            cfg.infra_autoscaler_base_url.as_ref(),
-            "infra autoscaler unavailable",
-        )
-    };
-    let Some(base) = base else {
-        anyhow::bail!("{}: {}", RC_ORCH_DEPENDENCY_UNAVAILABLE, reason);
-    };
-    let url = format!("{base}{endpoint}");
-    let resp = http
-        .post(url)
-        .header("X-Tenant-Id", action.tenant_id.clone())
-        .header("X-Orch-Action-Id", action.action_id.clone())
-        .json(&action.payload_json)
-        .send()
-        .await
-        .context("infra request failed")?;
-    if !resp.status().is_success() {
-        anyhow::bail!("{}: infra_non_success", RC_ORCH_DEPENDENCY_UNAVAILABLE);
-    }
-    Ok(())
-}
-
 async fn process_action(
     db: &DbPool,
     http: &Client,
@@ -1220,7 +1183,7 @@ async fn process_action(
         let Some(op_id) = action.runtime_operation_id.clone() else {
             return Ok(());
         };
-        match poll_runtime_operation(http, cfg, &action, &op_id).await {
+        match poll_control_operation(http, cfg, &action, &op_id).await {
             Ok(op) => {
                 let db = db.clone();
                 execute_async(&db, move |conn| {
@@ -1304,7 +1267,7 @@ async fn process_action(
     }
 
     let dispatch_result = match action.action_type.as_str() {
-        "SetPoolTarget" => dispatch_runtime_control(
+        "SetPoolTarget" => dispatch_control_operation(
             http,
             cfg,
             &action,
@@ -1341,7 +1304,7 @@ async fn process_action(
                 .get("cpu_limit_percent")
                 .and_then(Value::as_u64)
                 .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?;
-            dispatch_runtime_control(
+            dispatch_control_operation(
                 http,
                 cfg,
                 &action,
@@ -1354,22 +1317,87 @@ async fn process_action(
             .await
             .map(Some)
         }
-        "SetPlacementPreference" => dispatch_non_runtime(
+        "SetPlacementPreference" => dispatch_control_operation(
             http,
             cfg,
             &action,
-            "/api/orchestration/placement-preference",
+            format!(
+                "/api/elasticity/control/workloads/{}/placement-preference",
+                action
+                    .payload_json
+                    .get("workload_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?
+            ),
+            json!({
+                "node_group": action
+                    .payload_json
+                    .get("node_group")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?,
+                "anti_affinity": action
+                    .payload_json
+                    .get("anti_affinity")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            }),
         )
         .await
-        .map(|_| None),
+        .map(Some),
         "ScaleNodeGroupUp" | "ScaleNodeGroupDown" => {
-            dispatch_non_runtime(http, cfg, &action, "/api/autoscaler/node-groups/scale")
-                .await
-                .map(|_| None)
-        }
-        "RollbackAction" => dispatch_non_runtime(http, cfg, &action, "/api/orchestration/rollback")
+            dispatch_control_operation(
+                http,
+                cfg,
+                &action,
+                format!(
+                    "/api/elasticity/control/node-groups/{}/scale",
+                    action
+                        .payload_json
+                        .get("node_group")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?
+                ),
+                json!({
+                    "delta_units": action
+                        .payload_json
+                        .get("delta_units")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| anyhow::anyhow!(RC_INVALID_ARGUMENT))?
+                }),
+            )
             .await
-            .map(|_| None),
+            .map(Some)
+        }
+        "RollbackAction" => dispatch_control_operation(
+            http,
+            cfg,
+            &action,
+            format!(
+                "/api/elasticity/control/actions/{}/rollback",
+                action
+                    .payload_json
+                    .get("target_action_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or(action.action_id.as_str())
+            ),
+            json!({
+                "target_action_id": action.payload_json.get("target_action_id").and_then(Value::as_str),
+                "target_operation_id": action.payload_json.get("target_operation_id").and_then(Value::as_str),
+                "reason_code": action.payload_json.get("reason_code").and_then(Value::as_str),
+                "reason_message": action.payload_json.get("reason_message").and_then(Value::as_str),
+                "payload": action.payload_json.get("payload").cloned()
+            }),
+        )
+        .await
+        .map(Some),
         _ => Err(anyhow::anyhow!(RC_ORCH_ACTION_UNSUPPORTED)),
     };
 

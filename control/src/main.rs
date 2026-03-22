@@ -43,21 +43,13 @@ struct Args {
     #[arg(long)]
     tls_ca: Option<PathBuf>,
 
-    /// Runtime elasticity control base URL
-    #[arg(long, env = "RUNTIME_CONTROL_BASE_URL")]
-    runtime_control_base_url: Option<String>,
+    /// Elasticity control base URL
+    #[arg(long, env = "CONTROL_BASE_URL")]
+    control_base_url: Option<String>,
 
-    /// Runtime machine API key (sent as X-Api-Key)
-    #[arg(long, env = "RUNTIME_CONTROL_API_KEY")]
-    runtime_control_api_key: Option<String>,
-
-    /// Infra autoscaler API base URL for node scale actions
-    #[arg(long, env = "INFRA_AUTOSCALER_BASE_URL")]
-    infra_autoscaler_base_url: Option<String>,
-
-    /// Infra scheduler API base URL for placement actions
-    #[arg(long, env = "INFRA_SCHEDULER_BASE_URL")]
-    infra_scheduler_base_url: Option<String>,
+    /// Elasticity control API key (sent as X-Api-Key)
+    #[arg(long, env = "CONTROL_API_KEY")]
+    control_api_key: Option<String>,
 }
 
 #[tokio::main]
@@ -87,10 +79,8 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState { db: db.clone() });
 
     let execution_config = ExecutionConfig {
-        runtime_control_base_url: args.runtime_control_base_url,
-        runtime_control_api_key: args.runtime_control_api_key,
-        infra_autoscaler_base_url: args.infra_autoscaler_base_url,
-        infra_scheduler_base_url: args.infra_scheduler_base_url,
+        control_base_url: args.control_base_url,
+        control_api_key: args.control_api_key,
     };
 
     orchestrator::start_loops(db, execution_config).await?;
